@@ -1,130 +1,313 @@
-'use client'
+cat << 'EOF' > app/page.tsx
+'use client';
 
-import { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 
-export default function ARMediaMVP() {
-  const [keyword, setKeyword] = useState('');
-  const [mode, setMode] = useState<'2.5d' | '3d'>('2.5d');
-  const [loading, setLoading] = useState(false);
-  const [assetUrl, setAssetUrl] = useState<string | null>(null);
-  const [news, setNews] = useState<any>(null);
+const newsData = {
+  it: {
+    label: 'IT',
+    icon: '⚡',
+    items: [
+      { id: 'it-1', title: '流行語ドパガキどう広がった 分析', tag: 'AI分析', arKeyword: 'ドパガキ 3D' },
+      { id: 'it-2', title: '高性能AI普及へ 年内に行動計画', tag: 'AI / テック', arKeyword: '次世代AIサーバーホログラム' },
+      { id: 'it-3', title: 'セコマ個人情報漏えい 第三者閲覧', tag: 'セキュリティ', arKeyword: 'サイバーセキュリティノード' },
+    ]
+  },
+  business: {
+    label: 'Business',
+    icon: '📈',
+    items: [
+      { id: 'b-1', title: '東北3地銀 28年4月統合向け協議へ', tag: '金融', arKeyword: '統合銀行ビル 3D' },
+      { id: 'b-2', title: '佐川急便 宅配便平均13%値上げへ', tag: '物流', arKeyword: '配送トラック 3D' },
+      { id: 'b-3', title: '東海汽船 一部船舶の使用停止処分', tag: '海運', arKeyword: '大型客船ホログラム' },
+    ]
+  },
+  entertainment: {
+    label: 'Entertainment',
+    icon: '🎬',
+    items: [
+      { id: 'e-1', title: '宮根誠司「ミヤネ屋」最終回で涙', tag: 'TV', arKeyword: 'TVスタジオ 3D' },
+      { id: 'e-2', title: '綾瀬はるか 天然発言で会場沸かす', tag: '芸能', arKeyword: 'ステージスポットライト' },
+      { id: 'e-3', title: 'ミヤネ屋最終回 20年の歴史に幕', tag: 'メディア', arKeyword: '20周年記念トロフィー' },
+    ]
+  }
+};
 
-  // 1. ページ読み込み時にニュースをWorkerから取得
-  useEffect(() => {
-    const fetchNews = async () => {
-      try {
-        const res = await fetch('https://xr-reference.kyouhitotsu-dev.workers.dev/api/news');
-        const data = await res.json();
-        setNews(data);
-      } catch (error) {
-        console.error("ニュース取得エラー:", error);
-      }
-    };
-    fetchNews();
-  }, []);
+export default function HomePage() {
+  const [activeCategory, setActiveCategory] = useState<'it' | 'business' | 'entertainment'>('it');
+  const [selectedNews, setSelectedNews] = useState<string>('it-1');
+  const [assetType, setAssetType] = useState<'2.5d' | '3d'>('3d');
+  const [isSummoning, setIsSummoning] = useState(false);
 
-  // 2. AR生成リクエストをWorkerへ送信
-  const handleGenerate = async () => {
-    if (!keyword) return;
-    setLoading(true);
-    setAssetUrl(null);
+  const currentNews = Object.values(newsData)
+    .flatMap(cat => cat.items)
+    .find(item => item.id === selectedNews);
 
-    try {
-      const res = await fetch('https://xr-reference.kyouhitotsu-dev.workers.dev/api/generate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ keyword, mode })
-      });
-      const data = await res.json();
-      if (data.url) setAssetUrl(data.url);
-    } catch (error) {
-      console.error("生成エラー:", error);
-    } finally {
-      setLoading(false);
-    }
+  const handleSummon = () => {
+    setIsSummoning(true);
+    setTimeout(() => {
+      setIsSummoning(false);
+      alert(`「${currentNews?.arKeyword}」をAR空間に召喚しました！`);
+    }, 1000);
   };
 
   return (
-    <div className="min-h-screen bg-gray-50 p-6 font-sans flex flex-col md:flex-row gap-6">
-      
-      {/* 左パネル：メディア記事＆ニュースセクション */}
-      <div className="flex-1 space-y-6">
-        <div className="bg-white rounded-xl shadow-sm p-6">
-          <h1 className="text-2xl font-bold mb-4 text-gray-800">最新ニュース & AR拡張記事</h1>
-          <p className="text-gray-600 text-sm mb-6">
-            記事内のキーワードから、直接AR空間に3Dオブジェクトや情景を召喚できます。
-          </p>
-          
-          {/* ニュース表示エリア */}
-          {news ? (
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              {['it', 'business', 'entertainment'].map((category) => (
-                <div key={category} className="border rounded-lg p-4">
-                  <h3 className="font-bold text-gray-700 uppercase mb-2 border-b pb-1">{category}</h3>
-                  <ul className="space-y-2 text-sm">
-                    {news[category]?.map((article: any, i: number) => (
-                      <li key={i}>
-                        <a href={article.url} target="_blank" rel="noreferrer" className="text-blue-600 hover:underline">
-                          {article.title}
-                        </a>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <p className="text-gray-400 text-sm animate-pulse">ニュースを読み込み中...</p>
-          )}
+    <div style={{
+      minHeight: '100vh',
+      backgroundColor: '#0b0f19',
+      color: '#f3f4f6',
+      fontFamily: 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+      padding: '24px 16px 140px 16px',
+      maxWidth: '720px',
+      margin: '0 auto',
+      boxSizing: 'border-box'
+    }}>
+      {/* ヘッダー */}
+      <header style={{ marginBottom: '28px', textAlign: 'center' }}>
+        <div style={{
+          display: 'inline-flex',
+          alignItems: 'center',
+          gap: '8px',
+          padding: '4px 12px',
+          borderRadius: '9999px',
+          backgroundColor: 'rgba(59, 130, 246, 0.12)',
+          border: '1px solid rgba(59, 130, 246, 0.3)',
+          color: '#60a5fa',
+          fontSize: '11px',
+          fontWeight: 700,
+          marginBottom: '12px',
+          letterSpacing: '0.08em'
+        }}>
+          <span style={{ width: '6px', height: '6px', borderRadius: '50%', backgroundColor: '#3b82f6', boxShadow: '0 0 8px #3b82f6' }}></span>
+          AR VISION PORTAL
         </div>
+        <h1 style={{
+          fontSize: '26px',
+          fontWeight: 800,
+          margin: '0 0 10px 0',
+          background: 'linear-gradient(135deg, #ffffff 0%, #93c5fd 50%, #c084fc 100%)',
+          WebkitBackgroundClip: 'text',
+          WebkitTextFillColor: 'transparent',
+          lineHeight: 1.3
+        }}>
+          最新ニュース &amp; AR拡張記事
+        </h1>
+        <p style={{ fontSize: '13px', color: '#9ca3af', margin: 0, lineHeight: 1.6 }}>
+          記事内のキーワードから、直接AR空間に3Dオブジェクトや情景を召喚できます。
+        </p>
+      </header>
+
+      {/* カテゴリタブ */}
+      <div style={{
+        display: 'flex',
+        gap: '6px',
+        marginBottom: '20px',
+        padding: '4px',
+        backgroundColor: '#111827',
+        borderRadius: '12px',
+        border: '1px solid rgba(255,255,255,0.08)'
+      }}>
+        {(Object.keys(newsData) as Array<keyof typeof newsData>).map((key) => {
+          const category = newsData[key];
+          const isActive = activeCategory === key;
+          return (
+            <button
+              key={key}
+              onClick={() => setActiveCategory(key)}
+              style={{
+                flex: 1,
+                padding: '10px',
+                borderRadius: '8px',
+                border: 'none',
+                background: isActive ? 'linear-gradient(135deg, #2563eb, #1d4ed8)' : 'transparent',
+                color: isActive ? '#ffffff' : '#9ca3af',
+                fontWeight: isActive ? 700 : 500,
+                fontSize: '13px',
+                cursor: 'pointer',
+                transition: 'all 0.2s ease',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: '6px'
+              }}
+            >
+              <span>{category.icon}</span>
+              <span style={{ textTransform: 'uppercase' }}>{key}</span>
+            </button>
+          );
+        })}
       </div>
 
-      {/* 右パネル：ARジェネレーターUI */}
-      <div className="w-full md:w-96 bg-white rounded-xl shadow-sm p-6 flex flex-col">
-        <h2 className="text-lg font-bold mb-4 text-gray-800">ARアセット生成</h2>
-        
-        <input 
-          type="text" 
-          value={keyword}
-          onChange={(e) => setKeyword(e.target.value)}
-          placeholder="例: サイバーパンクな日本刀"
-          className="w-full border border-gray-300 p-3 rounded-lg mb-4 text-black focus:ring-2 focus:ring-blue-500 outline-none"
-        />
-
-        <div className="flex gap-4 mb-6">
-          <label className="flex items-center gap-2 cursor-pointer">
-            <input type="radio" name="mode" value="2.5d" checked={mode === '2.5d'} onChange={() => setMode('2.5d')} />
-            <span className="text-gray-700 text-sm">2.5D (高速画像)</span>
-          </label>
-          <label className="flex items-center gap-2 cursor-pointer">
-            <input type="radio" name="mode" value="3d" checked={mode === '3d'} onChange={() => setMode('3d')} />
-            <span className="text-gray-700 text-sm">3D (GLB)</span>
-          </label>
-        </div>
-
-        <button 
-          onClick={handleGenerate}
-          disabled={loading || !keyword}
-          className="w-full bg-blue-600 text-white font-bold py-3 rounded-lg hover:bg-blue-700 disabled:opacity-50 transition-colors"
-        >
-          {loading ? 'AIが生成中...' : '空間に召喚する'}
-        </button>
-
-        {/* ARビューア領域 */}
-        {assetUrl && (
-          <div className="mt-6 w-full h-64 bg-gray-900 rounded-xl overflow-hidden relative shadow-inner">
-            {mode === '2.5d' ? (
-              <div className="absolute inset-0 flex items-center justify-center p-4">
-                <img src={assetUrl} alt="Generated AR Asset" className="max-h-full object-contain drop-shadow-2xl animate-pulse" />
+      {/* ニュースリスト */}
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginBottom: '32px' }}>
+        {newsData[activeCategory].items.map((item) => {
+          const isSelected = selectedNews === item.id;
+          return (
+            <div
+              key={item.id}
+              onClick={() => setSelectedNews(item.id)}
+              style={{
+                padding: '14px 16px',
+                borderRadius: '12px',
+                backgroundColor: isSelected ? 'rgba(30, 41, 59, 0.9)' : '#111827',
+                border: isSelected ? '1px solid #3b82f6' : '1px solid rgba(255, 255, 255, 0.05)',
+                cursor: 'pointer',
+                transition: 'all 0.2s ease',
+                boxShadow: isSelected ? '0 0 16px rgba(59, 130, 246, 0.25)' : 'none',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: '12px'
+              }}
+            >
+              <div style={{ flex: 1 }}>
+                <span style={{
+                  fontSize: '10px',
+                  padding: '2px 6px',
+                  borderRadius: '4px',
+                  backgroundColor: isSelected ? 'rgba(59, 130, 246, 0.25)' : 'rgba(255, 255, 255, 0.06)',
+                  color: isSelected ? '#93c5fd' : '#6b7280',
+                  fontWeight: 600,
+                  display: 'inline-block',
+                  marginBottom: '4px'
+                }}>
+                  {item.tag}
+                </span>
+                <div style={{
+                  fontSize: '14px',
+                  fontWeight: 600,
+                  color: isSelected ? '#ffffff' : '#d1d5db',
+                  lineHeight: 1.4
+                }}>
+                  {item.title}
+                </div>
               </div>
-            ) : (
-              // @ts-ignore
-              <model-viewer src={assetUrl} ar auto-rotate camera-controls style={{ width: '100%', height: '100%' }} />
+              <div style={{
+                fontSize: '11px',
+                color: isSelected ? '#60a5fa' : '#4b5563',
+                fontWeight: 600,
+                display: 'flex',
+                alignItems: 'center',
+                gap: '4px'
+              }}>
+                <span>AR</span>
+                <span>{isSelected ? '●' : '○'}</span>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* ARアセット生成パネル（画面下部固定フローティング） */}
+      <div style={{
+        position: 'fixed',
+        bottom: '16px',
+        left: '50%',
+        transform: 'translateX(-50%)',
+        width: 'calc(100% - 32px)',
+        maxWidth: '680px',
+        backgroundColor: 'rgba(17, 24, 39, 0.92)',
+        backdropFilter: 'blur(16px)',
+        WebkitBackdropFilter: 'blur(16px)',
+        border: '1px solid rgba(147, 197, 253, 0.25)',
+        borderRadius: '16px',
+        padding: '14px 16px',
+        boxShadow: '0 16px 36px rgba(0, 0, 0, 0.7), 0 0 24px rgba(59, 130, 246, 0.2)',
+        boxSizing: 'border-box'
+      }}>
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          marginBottom: '10px',
+          flexWrap: 'wrap',
+          gap: '8px'
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+            <span style={{ fontSize: '16px' }}>🔮</span>
+            <span style={{ fontSize: '14px', fontWeight: 700, color: '#f3f4f6' }}>ARアセット生成</span>
+            {currentNews && (
+              <span style={{
+                fontSize: '11px',
+                color: '#c084fc',
+                backgroundColor: 'rgba(192, 132, 252, 0.15)',
+                padding: '2px 6px',
+                borderRadius: '4px',
+                fontWeight: 600
+              }}>
+                {currentNews.arKeyword}
+              </span>
             )}
           </div>
-        )}
-      </div>
 
+          {/* モード切り替え */}
+          <div style={{
+            display: 'flex',
+            backgroundColor: '#030712',
+            padding: '2px',
+            borderRadius: '8px',
+            border: '1px solid rgba(255,255,255,0.1)'
+          }}>
+            <button
+              onClick={() => setAssetType('2.5d')}
+              style={{
+                padding: '5px 10px',
+                borderRadius: '6px',
+                border: 'none',
+                backgroundColor: assetType === '2.5d' ? '#374151' : 'transparent',
+                color: assetType === '2.5d' ? '#ffffff' : '#9ca3af',
+                fontSize: '11px',
+                fontWeight: 600,
+                cursor: 'pointer'
+              }}
+            >
+              2.5D (高速画像)
+            </button>
+            <button
+              onClick={() => setAssetType('3d')}
+              style={{
+                padding: '5px 10px',
+                borderRadius: '6px',
+                border: 'none',
+                backgroundColor: assetType === '3d' ? '#2563eb' : 'transparent',
+                color: assetType === '3d' ? '#ffffff' : '#9ca3af',
+                fontSize: '11px',
+                fontWeight: 600,
+                cursor: 'pointer'
+              }}
+            >
+              3D (GLB)
+            </button>
+          </div>
+        </div>
+
+        {/* 召喚ボタン */}
+        <button
+          onClick={handleSummon}
+          disabled={isSummoning}
+          style={{
+            width: '100%',
+            padding: '12px',
+            borderRadius: '10px',
+            border: 'none',
+            background: isSummoning
+              ? '#374151'
+              : 'linear-gradient(135deg, #a855f7 0%, #3b82f6 50%, #06b6d4 100%)',
+            color: '#ffffff',
+            fontSize: '14px',
+            fontWeight: 700,
+            cursor: isSummoning ? 'not-allowed' : 'pointer',
+            boxShadow: '0 4px 16px rgba(168, 85, 247, 0.35)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: '6px'
+          }}
+        >
+          <span>{isSummoning ? '⏳ 召喚中...' : '✨ 空間に召喚する'}</span>
+        </button>
+      </div>
     </div>
   );
 }
+EOF

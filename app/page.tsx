@@ -1,4 +1,3 @@
-cat << 'EOF' > app/page.tsx
 'use client';
 
 import React, { useState } from 'react';
@@ -198,7 +197,7 @@ export default function HomePage() {
         })}
       </div>
 
-      {/* ARアセット生成パネル（画面下部固定フローティング） */}
+      {/* ARアセット生成パネル */}
       <div style={{
         position: 'fixed',
         bottom: '16px',
@@ -240,7 +239,6 @@ export default function HomePage() {
             )}
           </div>
 
-          {/* モード切り替え */}
           <div style={{
             display: 'flex',
             backgroundColor: '#030712',
@@ -281,7 +279,6 @@ export default function HomePage() {
           </div>
         </div>
 
-        {/* 召喚ボタン */}
         <button
           onClick={handleSummon}
           disabled={isSummoning}
@@ -310,4 +307,3 @@ export default function HomePage() {
     </div>
   );
 }
-EOF

@@ -88,6 +88,14 @@ export default function HomePage() {
       const res = await fetch(`${API_BASE}/api/news`);
       if (!res.ok) throw new Error(String(res.status));
       const data: NewsData = await res.json();
+      // 中身（要約）があるニュースだけを表示する。要約付きが1件もない旧形式のデータはそのまま表示
+      const hasAnySummary = Object.values(data).some(v => Array.isArray(v) && v.some(i => i?.summary));
+      if (hasAnySummary) {
+        for (const k of Object.keys(data)) {
+          const v = data[k];
+          if (Array.isArray(v)) data[k] = v.filter(i => i?.summary);
+        }
+      }
       setNewsData(data);
       const first = Object.keys(data).find(k => Array.isArray(data[k]) && (data[k] as NewsItem[]).length > 0);
       if (first) setActiveCategory(prev => (Array.isArray(data[prev]) && (data[prev] as NewsItem[]).length ? prev : first));

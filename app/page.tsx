@@ -20,15 +20,26 @@ export default function HomePage() {
   const [progress, setProgress] = useState(0);
   const [assetUrl, setAssetUrl] = useState<string | null>(null);
 
-  // 1. Workerからニュースを取得
+  // デバイス判定と現在のURL（QRコード用）
+  const [isDesktop, setIsDesktop] = useState(false);
+  const [currentUrl, setCurrentUrl] = useState('');
+
+  // 1. Workerからニュースを取得 ＆ デバイス判定
   useEffect(() => {
+    // URLの取得
+    setCurrentUrl(window.location.href);
+    
+    // 画面幅でPCかスマホか判定
+    const checkDevice = () => setIsDesktop(window.innerWidth > 768);
+    checkDevice();
+    window.addEventListener('resize', checkDevice);
+
     const fetchNews = async () => {
       try {
         const res = await fetch('https://xr-reference.kyouhitotsu-dev.workers.dev/api/news');
         const data = await res.json();
         setNewsData(data);
         
-        // 初期状態のセット
         const firstCategory = Object.keys(data).find(k => k !== 'last_updated');
         if (firstCategory && data[firstCategory]?.[0]) {
           setActiveCategory(firstCategory);
@@ -39,6 +50,8 @@ export default function HomePage() {
       }
     };
     fetchNews();
+
+    return () => window.removeEventListener('resize', checkDevice);
   }, []);
 
   // 2. AR/画像生成のリクエスト処理
@@ -49,7 +62,6 @@ export default function HomePage() {
     setAssetUrl(null);
 
     try {
-      // ニュースのタイトルをそのまま生成キーワードとして利用
       const res = await fetch('https://xr-reference.kyouhitotsu-dev.workers.dev/api/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -95,7 +107,7 @@ export default function HomePage() {
         clearInterval(interval);
         setIsSummoning(false);
       }
-    }, 5000); // 5秒おきに確認
+    }, 5000);
   };
 
   const categories = newsData ? Object.keys(newsData).filter(k => k !== 'last_updated') : [];
@@ -106,11 +118,45 @@ export default function HomePage() {
       backgroundColor: '#0b0f19',
       color: '#f3f4f6',
       fontFamily: 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
-      padding: '24px 16px 200px 16px', // パネルに被らないよう余白を多めに
+      padding: '24px 16px 200px 16px',
       maxWidth: '720px',
       margin: '0 auto',
-      boxSizing: 'border-box'
+      boxSizing: 'border-box',
+      position: 'relative'
     }}>
+      
+      {/* PC用: 右上のQRコードウィジェット */}
+      {isDesktop && currentUrl && (
+        <div style={{
+          position: 'fixed',
+          top: '24px',
+          right: '24px',
+          width: '220px',
+          backgroundColor: 'rgba(17, 24, 39, 0.9)',
+          backdropFilter: 'blur(8px)',
+          padding: '16px',
+          borderRadius: '16px',
+          border: '1px solid rgba(59, 130, 246, 0.3)',
+          textAlign: 'center',
+          boxShadow: '0 8px 32px rgba(0, 0, 0, 0.5)',
+          zIndex: 50
+        }}>
+          <div style={{ fontSize: '13px', color: '#93c5fd', fontWeight: 800, marginBottom: '8px' }}>
+            📱 スマホでAR体験！
+          </div>
+          <p style={{ fontSize: '11px', color: '#9ca3af', marginBottom: '12px', lineHeight: 1.4 }}>
+            スマホのカメラでQRコードを読み込むと、現実空間にニュースを召喚できます。
+          </p>
+          <div style={{ padding: '8px', backgroundColor: '#fff', borderRadius: '12px', display: 'inline-block' }}>
+            <img 
+              src={`https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${encodeURIComponent(currentUrl)}`} 
+              alt="QR Code"
+              style={{ width: '150px', height: '150px', display: 'block' }}
+            />
+          </div>
+        </div>
+      )}
+
       {/* ヘッダー */}
       <header style={{ marginBottom: '28px', textAlign: 'center' }}>
         <div style={{
@@ -171,7 +217,7 @@ export default function HomePage() {
                   key={key}
                   onClick={() => {
                     setActiveCategory(key);
-                    setSelectedNews(newsData[key][0]); // タブ切り替え時に最初の記事を選択
+                    setSelectedNews(newsData[key][0]);
                   }}
                   style={{
                     flex: 1,
@@ -198,7 +244,7 @@ export default function HomePage() {
             })}
           </div>
 
-          {/* ニュースリスト（動的データ対応・スクロール可能） */}
+          {/* ニュースリスト */}
           <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginBottom: '32px' }}>
             {newsData[activeCategory]?.map((item: any, idx: number) => {
               const isSelected = selectedNews?.url === item.url;
@@ -220,7 +266,6 @@ export default function HomePage() {
                     gap: '12px'
                   }}
                 >
-                  {/* クリックで選択 */}
                   <div onClick={() => setSelectedNews(item)} style={{ flex: 1, cursor: 'pointer' }}>
                     <span style={{
                       fontSize: '10px',
@@ -245,7 +290,6 @@ export default function HomePage() {
                     </div>
                   </div>
                   
-                  {/* 右側：元記事リンク & AR選択マーカー */}
                   <div style={{
                     display: 'flex',
                     flexDirection: 'column',
@@ -256,7 +300,7 @@ export default function HomePage() {
                       href={item.url}
                       target="_blank"
                       rel="noreferrer"
-                      onClick={(e) => e.stopPropagation()} // 親のクリックイベントを発火させない
+                      onClick={(e) => e.stopPropagation()}
                       style={{
                         fontSize: '11px',
                         color: '#93c5fd',
@@ -305,13 +349,22 @@ export default function HomePage() {
           {assetType === '2.5d' ? (
             <img src={assetUrl} alt="2.5D Asset" style={{ maxWidth: '100%', maxHeight: '250px', borderRadius: '8px' }} />
           ) : (
-            // @ts-ignore
-            <model-viewer src={assetUrl} ar auto-rotate camera-controls style={{ width: '100%', height: '250px' }} />
+            <>
+              {/* @ts-ignore */}
+              <model-viewer src={assetUrl} ar auto-rotate camera-controls style={{ width: '100%', height: '250px' }} />
+              
+              {/* PC用のアナウンス文 */}
+              {isDesktop && (
+                <p style={{ fontSize: '11px', color: '#fbbf24', marginTop: '12px', lineHeight: 1.4 }}>
+                  ⚠️ PCでは3Dプレビューのみ可能です。<br/>空間への配置（AR体験）は右上のQRコードからスマホでアクセスしてください。
+                </p>
+              )}
+            </>
           )}
         </div>
       )}
 
-      {/* ARアセット生成パネル */}
+      {/* ARアセット生成パネル（固定フッター） */}
       <div style={{
         position: 'fixed',
         bottom: '16px',
@@ -326,7 +379,8 @@ export default function HomePage() {
         borderRadius: '16px',
         padding: '14px 16px',
         boxShadow: '0 16px 36px rgba(0, 0, 0, 0.7), 0 0 24px rgba(59, 130, 246, 0.2)',
-        boxSizing: 'border-box'
+        boxSizing: 'border-box',
+        zIndex: 100
       }}>
         <div style={{
           display: 'flex',

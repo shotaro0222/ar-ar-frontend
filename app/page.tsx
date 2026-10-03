@@ -125,8 +125,12 @@ export default function HomePage() {
         @keyframes pulse-glow { 0%, 100% { opacity: 0.6; } 50% { opacity: 1; } }
       `}} />
 
-　　　　　<script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-8323476567735522"
-     crossorigin="anonymous"></script>
+      {/* AdSenseスクリプトをNext.jsの<Script>コンポーネントに修正し、crossOriginを適用 */}
+      <Script 
+        async 
+        src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-8323476567735522"
+        crossOrigin="anonymous"
+      />
 
       <Script type="module" src="https://ajax.googleapis.com/ajax/libs/model-viewer/3.4.0/model-viewer.min.js" />
 
@@ -144,6 +148,7 @@ export default function HomePage() {
             スマホのカメラでQRコードを読み込むと、現実空間にニュースを召喚できます。
           </p>
           <div style={{ padding: '8px', backgroundColor: '#fff', borderRadius: '12px', display: 'inline-block' }}>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
             <img src={`https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${encodeURIComponent(currentUrl)}`} alt="QR Code" style={{ width: '150px', height: '150px', display: 'block' }} />
           </div>
         </div>
@@ -285,6 +290,7 @@ export default function HomePage() {
         }}>
           <h3 style={{ fontSize: '13px', color: '#93c5fd', margin: '0 0 12px 0' }}>生成完了</h3>
           {assetType === '2.5d' ? (
+            /* eslint-disable-next-line @next/next/no-img-element */
             <img src={assetUrl} alt="2.5D Asset" style={{ maxWidth: '100%', maxHeight: '250px', borderRadius: '8px' }} />
           ) : (
             <>

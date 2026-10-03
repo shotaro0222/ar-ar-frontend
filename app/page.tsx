@@ -3,7 +3,6 @@
 import React, { useState, useEffect } from 'react';
 import Script from 'next/script';
 
-// オモシロ(funny)のラベルを修正
 const categoryMeta: Record<string, { label: string; icon: string }> = {
   it: { label: 'IT', icon: '⚡' },
   business: { label: 'ビジネス', icon: '📈' },
@@ -106,21 +105,18 @@ export default function HomePage() {
 
   return (
     <div style={{
-      minHeight: '100vh',
-      backgroundColor: '#0b0f19',
-      color: '#f3f4f6',
+      minHeight: '100vh', backgroundColor: '#0b0f19', color: '#f3f4f6',
       fontFamily: 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
-      padding: '24px 16px 200px 16px',
-      maxWidth: '720px',
-      margin: '0 auto',
-      boxSizing: 'border-box',
-      position: 'relative'
+      padding: '24px 16px 200px 16px', maxWidth: '720px', margin: '0 auto',
+      boxSizing: 'border-box', position: 'relative'
     }}>
       
-      {/* 3Dモデルタップ時の白枠（フォーカスリング）を消すCSSを埋め込み */}
+      {/* SVGロゴ用のアニメーションと白枠対策CSS */}
       <style dangerouslySetInnerHTML={{__html: `
         model-viewer:focus { outline: none; }
         model-viewer { --poster-color: transparent; }
+        @keyframes spin-slow { 100% { transform: rotate(360deg); } }
+        @keyframes pulse-glow { 0%, 100% { opacity: 0.6; } 50% { opacity: 1; } }
       `}} />
 
       <Script type="module" src="https://ajax.googleapis.com/ajax/libs/model-viewer/3.4.0/model-viewer.min.js" />
@@ -133,7 +129,7 @@ export default function HomePage() {
           textAlign: 'center', boxShadow: '0 8px 32px rgba(0, 0, 0, 0.5)', zIndex: 50
         }}>
           <div style={{ fontSize: '13px', color: '#93c5fd', fontWeight: 800, marginBottom: '8px' }}>
-            📱 スマホでAR体験！
+            📱 スマホでXR体験！
           </div>
           <p style={{ fontSize: '11px', color: '#9ca3af', marginBottom: '12px', lineHeight: 1.4 }}>
             スマホのカメラでQRコードを読み込むと、現実空間にニュースを召喚できます。
@@ -149,20 +145,39 @@ export default function HomePage() {
           display: 'inline-flex', alignItems: 'center', gap: '8px', padding: '4px 12px',
           borderRadius: '9999px', backgroundColor: 'rgba(59, 130, 246, 0.12)',
           border: '1px solid rgba(59, 130, 246, 0.3)', color: '#60a5fa', fontSize: '11px',
-          fontWeight: 700, marginBottom: '12px', letterSpacing: '0.08em'
+          fontWeight: 700, marginBottom: '16px', letterSpacing: '0.08em'
         }}>
           <span style={{ width: '6px', height: '6px', borderRadius: '50%', backgroundColor: '#3b82f6', boxShadow: '0 0 8px #3b82f6' }}></span>
-          HoloNews
+          News Summoner
         </div>
-        <h1 style={{
-          fontSize: '26px', fontWeight: 800, margin: '0 0 10px 0',
-          background: 'linear-gradient(135deg, #ffffff 0%, #93c5fd 50%, #c084fc 100%)',
-          WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', lineHeight: 1.3
-        }}>
-          最新ニュース &amp; AR拡張
-        </h1>
+
+        {/* SVGグラフィックロゴ */}
+        <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '16px' }}>
+          <svg viewBox="0 0 340 80" style={{ width: '100%', maxWidth: '340px', height: 'auto' }}>
+            <defs>
+              <linearGradient id="textGrad" x1="0" y1="0" x2="1" y2="1">
+                <stop offset="0%" stopColor="#ffffff"/>
+                <stop offset="50%" stopColor="#93c5fd"/>
+                <stop offset="100%" stopColor="#c084fc"/>
+              </linearGradient>
+              <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+                <feGaussianBlur stdDeviation="3" result="blur" />
+                <feComposite in="SourceGraphic" in2="blur" operator="over" />
+              </filter>
+            </defs>
+            <g style={{ transformOrigin: '40px 40px', animation: 'spin-slow 12s linear infinite' }}>
+              <circle cx="40" cy="40" r="28" fill="none" stroke="url(#textGrad)" strokeWidth="1.5" strokeDasharray="4 6" />
+              <polygon points="40,15 57,55 18,30 62,30 23,55" fill="none" stroke="#60a5fa" strokeWidth="1" opacity="0.5" />
+            </g>
+            <circle cx="40" cy="40" r="12" fill="url(#textGrad)" filter="url(#glow)" style={{ animation: 'pulse-glow 2s ease-in-out infinite' }} />
+            <text x="85" y="52" fontFamily="system-ui, sans-serif" fontSize="28" fontWeight="900" fill="url(#textGrad)" letterSpacing="1">
+              News Summoner
+            </text>
+          </svg>
+        </div>
+
         <p style={{ fontSize: '13px', color: '#9ca3af', margin: 0, lineHeight: 1.6 }}>
-          実際のニュースを選択して、記事の世界をAR空間に召喚できます。
+          実際のニュースを選択して、記事の世界をXR空間に召喚できます。
         </p>
       </header>
 
@@ -244,7 +259,7 @@ export default function HomePage() {
                       🔗 記事を読む
                     </a>
                     <div onClick={() => setSelectedNews(item)} style={{ fontSize: '11px', color: isSelected ? '#60a5fa' : '#4b5563', fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}>
-                      <span>AR対象</span>
+                      <span>XR対象</span>
                       <span>{isSelected ? '●' : '○'}</span>
                     </div>
                   </div>
@@ -265,20 +280,11 @@ export default function HomePage() {
             <img src={assetUrl} alt="2.5D Asset" style={{ maxWidth: '100%', maxHeight: '250px', borderRadius: '8px' }} />
           ) : (
             <>
-              {/* 白枠対策の outline: 'none' をインラインでも追加 */}
               {/* @ts-ignore */}
-              <model-viewer 
-                src={assetUrl} 
-                ar 
-                ar-modes="webxr scene-viewer quick-look" 
-                auto-rotate 
-                camera-controls 
-                style={{ width: '100%', height: '250px', outline: 'none', backgroundColor: 'transparent' }} 
-              />
-              
+              <model-viewer src={assetUrl} ar ar-modes="webxr scene-viewer quick-look" auto-rotate camera-controls style={{ width: '100%', height: '250px', outline: 'none', backgroundColor: 'transparent' }} />
               {isDesktop && (
                 <p style={{ fontSize: '11px', color: '#fbbf24', marginTop: '12px', lineHeight: 1.4 }}>
-                  ⚠️ PCでは3Dプレビューのみ可能です。<br/>空間への配置（AR体験）は右上のQRコードからスマホでアクセスしてください。
+                  ⚠️ PCでは3Dプレビューのみ可能です。<br/>空間への配置（XR体験）は右上のQRコードからスマホでアクセスしてください。
                 </p>
               )}
             </>
@@ -297,7 +303,7 @@ export default function HomePage() {
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px', flexWrap: 'wrap', gap: '8px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px', maxWidth: '50%' }}>
             <span style={{ fontSize: '16px' }}>🔮</span>
-            <span style={{ fontSize: '14px', fontWeight: 700, color: '#f3f4f6', whiteSpace: 'nowrap' }}>AR生成</span>
+            <span style={{ fontSize: '14px', fontWeight: 700, color: '#f3f4f6', whiteSpace: 'nowrap' }}>XRアセット生成</span>
             {selectedNews && (
               <span style={{
                 fontSize: '11px', color: '#c084fc', backgroundColor: 'rgba(192, 132, 252, 0.15)',

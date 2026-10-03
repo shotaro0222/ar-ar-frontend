@@ -14,17 +14,33 @@ const categoryMeta: Record<string, { label: string; icon: string }> = {
   funny: { label: 'オモシロ', icon: '🎭' }
 };
 
-type NewsItem = { title: string; url: string; summary?: string };
+type NewsItem = { title: string; url: string; summary?: string; source?: string };
 type NewsData = Record<string, NewsItem[] | string> & { last_updated?: string };
-type Bubble = { label?: string; title: string; summary?: string; hint?: boolean };
+type Bubble = { label?: string; title: string; sentences?: string[]; source?: string; hint?: boolean };
 
 const HINT_BUBBLE: Bubble = {
   hint: true,
-  title: 'こんにちは！気になるニュースのタイトルをタップしてね。ボクが読み上げるよ🎙️'
+  title: 'こんにちは！気になるニュースのタイトルをタップしてね。記事の中身をボクが読み上げるよ🎙️'
 };
 
 // アバターのアニメーション名（RobotExpressive.glb に含まれるもの）
 const ANIM = { idle: 'Idle', talk: 'Yes', wave: 'Wave', happy: 'ThumbsUp' } as const;
+
+// 読み上げ用に文単位で分割（長すぎる文は読点で分ける）
+function splitSentences(text: string): string[] {
+  const raw = text.match(/[^。！？!?]+[。！？!?」』）)]*/g) || [text];
+  const out: string[] = [];
+  for (const s of raw.map(t => t.trim()).filter(Boolean)) {
+    if (s.length <= 100) { out.push(s); continue; }
+    let buf = '';
+    for (const part of s.split(/(?<=、)/)) {
+      if ((buf + part).length > 100 && buf) { out.push(buf); buf = ''; }
+      buf += part;
+    }
+    if (buf) out.push(buf);
+  }
+  return out;
+}
 
 const itemKey = (cat: string, item: NewsItem) => `${cat}::${item.title}::${item.url}`;
 
@@ -53,15 +69,18 @@ export default function HomePage() {
   const [activeCategory, setActiveCategory] = useState<string>('it');
   const [speakingKey, setSpeakingKey] = useState<string | null>(null);
   const [bubble, setBubble] = useState<Bubble>(HINT_BUBBLE);
+  const [activeSeg, setActiveSeg] = useState(-1); // 吹き出し内で今読んでいる文（-1 = タイトル）
   const [animation, setAnimation] = useState<string>(ANIM.idle);
   const [muted, setMuted] = useState(false);
   const [showQr, setShowQr] = useState(false);
   const [currentUrl, setCurrentUrl] = useState('');
 
   const voiceRef = useRef<SpeechSynthesisVoice | null>(null);
-  const utterRef = useRef<SpeechSynthesisUtterance | null>(null); // GC対策と「最新の発話か」の判定に使う
+  const sessionRef = useRef<object | null>(null); // 「最新の読み上げか」の判定に使う
+  const utterQueueRef = useRef<SpeechSynthesisUtterance[]>([]);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const viewerRef = useRef<any>(null);
+  const bubbleRef = useRef<HTMLDivElement | null>(null);
 
   const fetchNews = useCallback(async () => {
     setLoadError(false);
@@ -70,8 +89,8 @@ export default function HomePage() {
       if (!res.ok) throw new Error(String(res.status));
       const data: NewsData = await res.json();
       setNewsData(data);
-      const first = Object.keys(data).find(k => k !== 'last_updated');
-      if (first) setActiveCategory(prev => (Array.isArray(data[prev]) ? prev : first));
+      const first = Object.keys(data).find(k => Array.isArray(data[k]) && (data[k] as NewsItem[]).length > 0);
+      if (first) setActiveCategory(prev => (Array.isArray(data[prev]) && (data[prev] as NewsItem[]).length ? prev : first));
     } catch (error) {
       console.error('ニュースの取得に失敗しました', error);
       setLoadError(true);
@@ -111,6 +130,18 @@ export default function HomePage() {
     };
   }, [fetchNews]);
 
+  // 今読んでいる文が吹き出しの中で見えるようにスクロール
+  useEffect(() => {
+    const box = bubbleRef.current;
+    const el = box?.querySelector('.is-reading') as HTMLElement | null;
+    if (!box) return;
+    if (!el) { if (activeSeg === -1) box.scrollTop = 0; return; }
+    const top = el.offsetTop; // 吹き出し(position:relative)基準
+    if (top < box.scrollTop || top + el.offsetHeight > box.scrollTop + box.clientHeight) {
+      box.scrollTo({ top: Math.max(0, top - 24), behavior: 'smooth' });
+    }
+  }, [activeSeg]);
+
   // アニメーション切り替え時に確実に再生させる
   useEffect(() => {
     const mv = viewerRef.current;
@@ -122,8 +153,10 @@ export default function HomePage() {
   const finishTalking = useCallback(() => {
     if (timerRef.current) clearTimeout(timerRef.current);
     timerRef.current = null;
-    utterRef.current = null;
+    sessionRef.current = null;
+    utterQueueRef.current = [];
     setSpeakingKey(null);
+    setActiveSeg(-1);
     setAnimation(ANIM.idle);
   }, []);
 
@@ -141,40 +174,57 @@ export default function HomePage() {
     }
 
     const label = categoryMeta[cat]?.label || cat;
-    setBubble({ label, title: item.title, summary: item.summary });
+    const sentences = item.summary ? splitSentences(item.summary) : [];
+    setBubble({ label, title: item.title, sentences, source: item.source });
+    setActiveSeg(-1);
     setSpeakingKey(key);
     setAnimation(ANIM.talk);
     if (timerRef.current) clearTimeout(timerRef.current);
 
+    const session = {};
+    sessionRef.current = session;
+    const totalLen = item.title.length + (item.summary?.length || 0);
+
     const canSpeak = !muted && typeof window !== 'undefined' && 'speechSynthesis' in window;
     if (!canSpeak) {
       // ミュート時・非対応ブラウザでは吹き出しだけで伝え、文字数に応じて会話モーションを止める
-      const ms = Math.min(12000, Math.max(2500, (item.title.length + (item.summary?.length || 0)) * 160));
-      timerRef.current = setTimeout(finishTalking, ms);
+      timerRef.current = setTimeout(finishTalking, Math.min(20000, Math.max(2500, totalLen * 150)));
       return;
     }
 
+    // 「タイトル → 記事の中身（1文ずつ）」の順に読み上げる。
+    // 1文ずつ分けるのは、長文が途中で切れるブラウザ不具合の回避と、吹き出しで今読んでいる文を示すため。
+    const segments: { text: string; seg: number }[] = [
+      { text: `${label}のニュースです。${item.title}。`, seg: -1 },
+      ...sentences.map((t, i) => ({ text: t, seg: i }))
+    ];
+    if (!sentences.length) segments.push({ text: 'このニュースには概要がありません。詳しくは記事ボタンからご覧ください。', seg: -1 });
+
     const synth = window.speechSynthesis;
     synth.cancel();
-    const text = `${label}のニュースです。${item.title}。${item.summary ? item.summary : ''}`;
-    const u = new SpeechSynthesisUtterance(text);
-    u.lang = 'ja-JP';
-    u.rate = 1.05;
-    u.pitch = 1.1;
-    if (voiceRef.current) u.voice = voiceRef.current;
-    const done = () => { if (utterRef.current === u) finishTalking(); };
-    u.onend = done;
-    u.onerror = (e) => {
-      if (utterRef.current !== u) return;
-      // 音声エンジンが使えない環境では、吹き出しだけで一定時間伝えてから終える
-      if (e.error === 'interrupted' || e.error === 'canceled') return finishTalking();
-      if (timerRef.current) clearTimeout(timerRef.current);
-      timerRef.current = setTimeout(finishTalking, Math.min(12000, Math.max(2500, text.length * 140)));
-    };
-    utterRef.current = u;
-    synth.speak(u);
+    const alive = () => sessionRef.current === session;
+    segments.forEach(({ text, seg }, idx) => {
+      const u = new SpeechSynthesisUtterance(text);
+      u.lang = 'ja-JP';
+      u.rate = 1.05;
+      u.pitch = 1.1;
+      if (voiceRef.current) u.voice = voiceRef.current;
+      u.onstart = () => { if (alive()) setActiveSeg(seg); };
+      if (idx === segments.length - 1) u.onend = () => { if (alive()) finishTalking(); };
+      u.onerror = (e) => {
+        if (!alive()) return;
+        if (e.error === 'interrupted' || e.error === 'canceled') return;
+        // 音声エンジンが使えない環境では、吹き出しだけで一定時間伝えてから終える
+        sessionRef.current = null;
+        synth.cancel();
+        if (timerRef.current) clearTimeout(timerRef.current);
+        timerRef.current = setTimeout(finishTalking, Math.min(20000, Math.max(2500, totalLen * 150)));
+      };
+      utterQueueRef.current.push(u); // GCで発話が消えるChromeの不具合対策に参照を保持
+      synth.speak(u);
+    });
     // 一部ブラウザで onend が来ないケースの保険
-    timerRef.current = setTimeout(done, Math.max(8000, text.length * 400));
+    timerRef.current = setTimeout(() => { if (alive()) finishTalking(); }, Math.max(10000, totalLen * 450));
   }, [speakingKey, muted, stopSpeaking, finishTalking]);
 
   const greet = () => {
@@ -192,7 +242,7 @@ export default function HomePage() {
     try { localStorage.setItem('ns-muted', next ? '1' : '0'); } catch { /* noop */ }
   };
 
-  const categories = newsData ? Object.keys(newsData).filter(k => k !== 'last_updated' && Array.isArray(newsData[k])) : [];
+  const categories = newsData ? Object.keys(newsData).filter(k => k !== 'last_updated' && Array.isArray(newsData[k]) && (newsData[k] as NewsItem[]).length > 0) : [];
   const items = (newsData?.[activeCategory] as NewsItem[] | undefined) || [];
   const isTalking = speakingKey !== null;
 
@@ -243,14 +293,17 @@ export default function HomePage() {
                       radial-gradient(ellipse at 50% 100%, rgba(168,85,247,0.25), transparent 70%), #0b0f19; }
         .ns-bubble-wrap { padding: 12px 16px 0; position: relative; z-index: 2; }
         .ns-bubble { position: relative; background: #f8fafc; color: #0f172a; border-radius: 16px; padding: 10px 14px;
-          box-shadow: 0 8px 24px rgba(0,0,0,0.45); max-height: 112px; overflow-y: auto; animation: ns-pop .25s ease-out; }
+          box-shadow: 0 8px 24px rgba(0,0,0,0.45); max-height: min(190px, 24dvh); overflow-y: auto; animation: ns-pop .25s ease-out; }
         .ns-bubble-tail { width: 0; height: 0; margin: 0 auto; border: 10px solid transparent;
           border-top-color: #f8fafc; border-bottom: 0; }
         .ns-bubble-label { display: inline-flex; align-items: center; gap: 6px; font-size: 10px; font-weight: 700;
           color: #7c3aed; background: #ede9fe; padding: 2px 6px; border-radius: 4px; margin-bottom: 4px; }
         .ns-bubble-title { font-size: 14px; font-weight: 700; line-height: 1.5; }
         .ns-bubble-hint { font-size: 13px; font-weight: 600; line-height: 1.5; color: #334155; }
-        .ns-bubble-summary { font-size: 12px; line-height: 1.6; color: #475569; margin-top: 4px; }
+        .ns-bubble-summary { font-size: 13px; line-height: 1.7; color: #334155; margin: 6px 0 0; }
+        .ns-bubble-summary span { transition: background-color .2s ease; border-radius: 3px; }
+        .ns-bubble .is-reading { background: #ede9fe; color: #4c1d95; box-shadow: 0 0 0 2px #ede9fe; }
+        .ns-bubble-source { font-size: 10px; color: #94a3b8; margin-top: 6px; text-align: right; }
         @keyframes ns-pop { from { transform: scale(.94); opacity: 0; } to { transform: scale(1); opacity: 1; } }
         .ns-viewer-wrap { flex: 1; min-height: 0; position: relative; }
         model-viewer { width: 100%; height: 100%; --poster-color: transparent; background: transparent; }
@@ -356,7 +409,7 @@ export default function HomePage() {
       {/* ===== 下部：XRアバター ===== */}
       <section className="ns-stage" aria-label="XRアバター">
         <div className="ns-bubble-wrap">
-          <div key={bubble.title} className="ns-bubble" role="status" aria-live="polite">
+          <div key={bubble.title} ref={bubbleRef} className="ns-bubble" role="status" aria-live="polite">
             {bubble.hint ? (
               <div className="ns-bubble-hint">{bubble.title}</div>
             ) : (
@@ -365,8 +418,17 @@ export default function HomePage() {
                   {bubble.label}のニュース
                   {isTalking && <span className="ns-bars" aria-hidden="true"><i /><i /><i /></span>}
                 </span>
-                <div className="ns-bubble-title">{bubble.title}</div>
-                {bubble.summary && <div className="ns-bubble-summary">{bubble.summary}</div>}
+                <div className={`ns-bubble-title${isTalking && activeSeg === -1 ? ' is-reading' : ''}`}>{bubble.title}</div>
+                {bubble.sentences && bubble.sentences.length > 0 ? (
+                  <p className="ns-bubble-summary">
+                    {bubble.sentences.map((t, i) => (
+                      <span key={i} data-seg={i} className={isTalking && activeSeg === i ? 'is-reading' : undefined}>{t}</span>
+                    ))}
+                  </p>
+                ) : (
+                  <p className="ns-bubble-summary">このニュースには概要がありません。詳しくは「🔗 記事」からご覧ください。</p>
+                )}
+                {bubble.source && <div className="ns-bubble-source">出典：{bubble.source}</div>}
               </>
             )}
           </div>

@@ -14,13 +14,13 @@ const categoryMeta: Record<string, { label: string; icon: string }> = {
   funny: { label: 'オモシロ', icon: '🎭' }
 };
 
-type NewsItem = { title: string; url: string; summary?: string; source?: string };
+type NewsItem = { title: string; url: string; summary?: string; summaryKind?: 'ai' | 'rss'; source?: string };
 type NewsData = Record<string, NewsItem[] | string> & { last_updated?: string };
-type Bubble = { label?: string; title: string; sentences?: string[]; source?: string; hint?: boolean };
+type Bubble = { label?: string; title: string; sentences?: string[]; source?: string; hint?: boolean; loading?: boolean };
 
 const HINT_BUBBLE: Bubble = {
   hint: true,
-  title: 'こんにちは！気になるニュースのタイトルをタップしてね。記事の中身をボクが読み上げるよ🎙️'
+  title: 'こんにちは！気になるニュースのタイトルをタップしてね。記事の中身をまとめて、ボクが読み上げるよ🎙️'
 };
 
 // アバターのアニメーション名（RobotExpressive.glb に含まれるもの）
@@ -182,8 +182,8 @@ export default function HomePage() {
     }
 
     const label = categoryMeta[cat]?.label || cat;
-    const sentences = item.summary ? splitSentences(item.summary) : [];
-    setBubble({ label, title: item.title, sentences, source: item.source });
+    const hasAiSummary = item.summaryKind === 'ai' && !!item.summary;
+    setBubble({ label, title: item.title, sentences: hasAiSummary ? splitSentences(item.summary!) : [], source: item.source, loading: !hasAiSummary });
     setActiveSeg(-1);
     setSpeakingKey(key);
     setAnimation(ANIM.talk);
@@ -191,48 +191,88 @@ export default function HomePage() {
 
     const session = {};
     sessionRef.current = session;
-    const totalLen = item.title.length + (item.summary?.length || 0);
+    const alive = () => sessionRef.current === session;
 
     const canSpeak = !muted && typeof window !== 'undefined' && 'speechSynthesis' in window;
-    if (!canSpeak) {
-      // ミュート時・非対応ブラウザでは吹き出しだけで伝え、文字数に応じて会話モーションを止める
-      timerRef.current = setTimeout(finishTalking, Math.min(20000, Math.max(2500, totalLen * 150)));
-      return;
-    }
+    const synth = canSpeak ? window.speechSynthesis : null;
+    if (synth) synth.cancel();
 
-    // 「タイトル → 記事の中身（1文ずつ）」の順に読み上げる。
-    // 1文ずつ分けるのは、長文が途中で切れるブラウザ不具合の回避と、吹き出しで今読んでいる文を示すため。
-    const segments: { text: string; seg: number }[] = [
-      { text: `${label}のニュースです。${item.title}。`, seg: -1 },
-      ...sentences.map((t, i) => ({ text: t, seg: i }))
-    ];
-    if (!sentences.length) segments.push({ text: 'このニュースには概要がありません。詳しくは記事ボタンからご覧ください。', seg: -1 });
+    let outstanding = 0; // まだ読み終わっていない発話の数
+    let contentReady = false; // 記事の中身を受け取ったか
+    let speechBroken = !synth;
 
-    const synth = window.speechSynthesis;
-    synth.cancel();
-    const alive = () => sessionRef.current === session;
-    segments.forEach(({ text, seg }, idx) => {
+    const silentFinish = (len: number) => {
+      // 音声なし（ミュート・非対応・音声エンジンのエラー）のときは、文字数に応じた時間だけ吹き出しで見せる
+      if (timerRef.current) clearTimeout(timerRef.current);
+      timerRef.current = setTimeout(() => { if (alive()) finishTalking(); }, Math.min(25000, Math.max(3000, len * 150)));
+    };
+    const maybeFinish = () => {
+      if (alive() && contentReady && outstanding === 0 && !speechBroken) finishTalking();
+    };
+    const enqueue = (text: string, seg: number) => {
+      if (!synth || speechBroken) return;
       const u = new SpeechSynthesisUtterance(text);
       u.lang = 'ja-JP';
       u.rate = 1.05;
       u.pitch = 1.1;
       if (voiceRef.current) u.voice = voiceRef.current;
+      outstanding++;
       u.onstart = () => { if (alive()) setActiveSeg(seg); };
-      if (idx === segments.length - 1) u.onend = () => { if (alive()) finishTalking(); };
+      u.onend = () => { if (!alive()) return; outstanding--; maybeFinish(); };
       u.onerror = (e) => {
         if (!alive()) return;
-        if (e.error === 'interrupted' || e.error === 'canceled') return;
-        // 音声エンジンが使えない環境では、吹き出しだけで一定時間伝えてから終える
-        sessionRef.current = null;
+        if (e.error === 'interrupted' || e.error === 'canceled') { outstanding--; return; }
+        speechBroken = true;
         synth.cancel();
-        if (timerRef.current) clearTimeout(timerRef.current);
-        timerRef.current = setTimeout(finishTalking, Math.min(20000, Math.max(2500, totalLen * 150)));
+        if (contentReady) silentFinish(item.title.length + (item.summary?.length || 0));
       };
       utterQueueRef.current.push(u); // GCで発話が消えるChromeの不具合対策に参照を保持
       synth.speak(u);
-    });
-    // 一部ブラウザで onend が来ないケースの保険
-    timerRef.current = setTimeout(() => { if (alive()) finishTalking(); }, Math.max(10000, totalLen * 450));
+    };
+
+    // 記事の中身を受け取ったら、1文ずつ読み上げに追加する
+    const deliver = (summary?: string | null) => {
+      if (!alive()) return;
+      const sentences = summary ? splitSentences(summary) : [];
+      setBubble(b => ({ ...b, sentences, loading: false }));
+      if (sentences.length) sentences.forEach((t, i) => enqueue(t, i));
+      else enqueue('このニュースの中身を取得できませんでした。詳しくは記事ボタンからご覧ください。', -1);
+      contentReady = true;
+      if (speechBroken) silentFinish(item.title.length + (summary?.length || 0));
+      else {
+        // 一部ブラウザで onend が来ないケースの保険
+        if (timerRef.current) clearTimeout(timerRef.current);
+        timerRef.current = setTimeout(() => { if (alive()) finishTalking(); }, Math.max(15000, (item.title.length + (summary?.length || 0)) * 450));
+        maybeFinish();
+      }
+    };
+
+    // まずタイトルを読む（タップ直後に発話を始めることで iOS の自動再生制限も回避）
+    enqueue(`${label}のニュースです。${item.title}。`, -1);
+
+    if (hasAiSummary) {
+      deliver(item.summary);
+      return;
+    }
+
+    // 記事ページから作ったAI要約を取得（サーバー側でキャッシュされるので2回目以降は速い）
+    const ctrl = new AbortController();
+    const abortTimer = setTimeout(() => ctrl.abort(), 25000);
+    fetch(`${API_BASE}/api/summary?url=${encodeURIComponent(item.url)}`, { signal: ctrl.signal })
+      .then(r => (r.ok ? r.json() : null))
+      .then((d: { summary?: string | null; summaryKind?: 'ai' | 'rss' } | null) => {
+        const summary = d?.summary || item.summary;
+        if (d?.summary) {
+          // 次回タップ時はすぐ読めるよう一覧のデータも更新
+          setNewsData(prev => {
+            if (!prev || !Array.isArray(prev[cat])) return prev;
+            return { ...prev, [cat]: (prev[cat] as NewsItem[]).map(i => (i.url === item.url ? { ...i, summary: d.summary!, summaryKind: d.summaryKind } : i)) };
+          });
+        }
+        deliver(summary);
+      })
+      .catch(() => deliver(item.summary))
+      .finally(() => clearTimeout(abortTimer));
   }, [speakingKey, muted, stopSpeaking, finishTalking]);
 
   const greet = () => {
@@ -311,6 +351,10 @@ export default function HomePage() {
         .ns-bubble-summary { font-size: 13px; line-height: 1.7; color: #334155; margin: 6px 0 0; }
         .ns-bubble-summary span { transition: background-color .2s ease; border-radius: 3px; }
         .ns-bubble .is-reading { background: #ede9fe; color: #4c1d95; box-shadow: 0 0 0 2px #ede9fe; }
+        .ns-loading { color: #7c3aed; font-weight: 600; }
+        .ns-dots i { font-style: normal; animation: ns-blink 1.2s infinite; }
+        .ns-dots i:nth-child(2) { animation-delay: .2s; } .ns-dots i:nth-child(3) { animation-delay: .4s; }
+        @keyframes ns-blink { 0%, 100% { opacity: .2; } 50% { opacity: 1; } }
         .ns-bubble-source { font-size: 10px; color: #94a3b8; margin-top: 6px; text-align: right; }
         @keyframes ns-pop { from { transform: scale(.94); opacity: 0; } to { transform: scale(1); opacity: 1; } }
         .ns-viewer-wrap { flex: 1; min-height: 0; position: relative; }
@@ -427,14 +471,16 @@ export default function HomePage() {
                   {isTalking && <span className="ns-bars" aria-hidden="true"><i /><i /><i /></span>}
                 </span>
                 <div className={`ns-bubble-title${isTalking && activeSeg === -1 ? ' is-reading' : ''}`}>{bubble.title}</div>
-                {bubble.sentences && bubble.sentences.length > 0 ? (
+                {bubble.loading ? (
+                  <p className="ns-bubble-summary ns-loading">記事を読み込んでいます<span className="ns-dots"><i>.</i><i>.</i><i>.</i></span></p>
+                ) : bubble.sentences && bubble.sentences.length > 0 ? (
                   <p className="ns-bubble-summary">
                     {bubble.sentences.map((t, i) => (
                       <span key={i} data-seg={i} className={isTalking && activeSeg === i ? 'is-reading' : undefined}>{t}</span>
                     ))}
                   </p>
                 ) : (
-                  <p className="ns-bubble-summary">このニュースには概要がありません。詳しくは「🔗 記事」からご覧ください。</p>
+                  <p className="ns-bubble-summary">このニュースの中身を取得できませんでした。詳しくは「🔗 記事」からご覧ください。</p>
                 )}
                 {bubble.source && <div className="ns-bubble-source">出典：{bubble.source}</div>}
               </>

@@ -111,8 +111,14 @@ export default function HomePage() {
       boxSizing: 'border-box', position: 'relative'
     }}>
       
-      {/* SVGロゴ用のアニメーションと白枠対策CSS */}
+      {/* 画面4辺の白枠を消し、背景を黒で統一するCSSを追加 */}
       <style dangerouslySetInnerHTML={{__html: `
+        html, body { 
+          margin: 0; 
+          padding: 0; 
+          background-color: #0b0f19; 
+          overflow-x: hidden; 
+        }
         model-viewer:focus { outline: none; }
         model-viewer { --poster-color: transparent; }
         @keyframes spin-slow { 100% { transform: rotate(360deg); } }
@@ -151,7 +157,6 @@ export default function HomePage() {
           News Summoner
         </div>
 
-        {/* SVGグラフィックロゴ */}
         <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '16px' }}>
           <svg viewBox="0 0 340 80" style={{ width: '100%', maxWidth: '340px', height: 'auto' }}>
             <defs>

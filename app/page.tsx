@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
+import Script from 'next/script';
 
 // APIから動的に取得したカテゴリを装飾するためのメタデータ
 const categoryMeta: Record<string, { label: string; icon: string }> = {
@@ -125,6 +126,9 @@ export default function HomePage() {
       position: 'relative'
     }}>
       
+      {/* 3Dモデル・AR表示用のGoogle公式スクリプト */}
+      <Script type="module" src="https://ajax.googleapis.com/ajax/libs/model-viewer/3.4.0/model-viewer.min.js" />
+
       {/* PC用: 右上のQRコードウィジェット */}
       {isDesktop && currentUrl && (
         <div style={{
@@ -351,7 +355,14 @@ export default function HomePage() {
           ) : (
             <>
               {/* @ts-ignore */}
-              <model-viewer src={assetUrl} ar auto-rotate camera-controls style={{ width: '100%', height: '250px' }} />
+              <model-viewer 
+                src={assetUrl} 
+                ar 
+                ar-modes="webxr scene-viewer quick-look" 
+                auto-rotate 
+                camera-controls 
+                style={{ width: '100%', height: '250px' }} 
+              />
               
               {/* PC用のアナウンス文 */}
               {isDesktop && (

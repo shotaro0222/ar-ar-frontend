@@ -1,54 +1,104 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 
-const newsData = {
-  it: {
-    label: 'IT',
-    icon: '⚡',
-    items: [
-      { id: 'it-1', title: '流行語ドパガキどう広がった 分析', tag: 'AI分析', arKeyword: 'ドパガキ 3D' },
-      { id: 'it-2', title: '高性能AI普及へ 年内に行動計画', tag: 'AI / テック', arKeyword: '次世代AIサーバーホログラム' },
-      { id: 'it-3', title: 'セコマ個人情報漏えい 第三者閲覧', tag: 'セキュリティ', arKeyword: 'サイバーセキュリティノード' },
-    ]
-  },
-  business: {
-    label: 'Business',
-    icon: '📈',
-    items: [
-      { id: 'b-1', title: '東北3地銀 28年4月統合向け協議へ', tag: '金融', arKeyword: '統合銀行ビル 3D' },
-      { id: 'b-2', title: '佐川急便 宅配便平均13%値上げへ', tag: '物流', arKeyword: '配送トラック 3D' },
-      { id: 'b-3', title: '東海汽船 一部船舶の使用停止処分', tag: '海運', arKeyword: '大型客船ホログラム' },
-    ]
-  },
-  entertainment: {
-    label: 'Entertainment',
-    icon: '🎬',
-    items: [
-      { id: 'e-1', title: '宮根誠司「ミヤネ屋」最終回で涙', tag: 'TV', arKeyword: 'TVスタジオ 3D' },
-      { id: 'e-2', title: '綾瀬はるか 天然発言で会場沸かす', tag: '芸能', arKeyword: 'ステージスポットライト' },
-      { id: 'e-3', title: 'ミヤネ屋最終回 20年の歴史に幕', tag: 'メディア', arKeyword: '20周年記念トロフィー' },
-    ]
-  }
+// APIから動的に取得したカテゴリを装飾するためのメタデータ
+const categoryMeta: Record<string, { label: string; icon: string }> = {
+  it: { label: 'IT', icon: '⚡' },
+  business: { label: 'Business', icon: '📈' },
+  entertainment: { label: 'Entertainment', icon: '🎬' },
+  funny: { label: 'Local', icon: '🎭' }
 };
 
 export default function HomePage() {
-  const [activeCategory, setActiveCategory] = useState<'it' | 'business' | 'entertainment'>('it');
-  const [selectedNews, setSelectedNews] = useState<string>('it-1');
+  const [newsData, setNewsData] = useState<any>(null);
+  const [activeCategory, setActiveCategory] = useState<string>('it');
+  const [selectedNews, setSelectedNews] = useState<any>(null);
+  
   const [assetType, setAssetType] = useState<'2.5d' | '3d'>('3d');
   const [isSummoning, setIsSummoning] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const [assetUrl, setAssetUrl] = useState<string | null>(null);
 
-  const currentNews = Object.values(newsData)
-    .flatMap(cat => cat.items)
-    .find(item => item.id === selectedNews);
+  // 1. Workerからニュースを取得
+  useEffect(() => {
+    const fetchNews = async () => {
+      try {
+        const res = await fetch('https://xr-reference.kyouhitotsu-dev.workers.dev/api/news');
+        const data = await res.json();
+        setNewsData(data);
+        
+        // 初期状態のセット
+        const firstCategory = Object.keys(data).find(k => k !== 'last_updated');
+        if (firstCategory && data[firstCategory]?.[0]) {
+          setActiveCategory(firstCategory);
+          setSelectedNews(data[firstCategory][0]);
+        }
+      } catch (error) {
+        console.error("ニュースの取得に失敗しました", error);
+      }
+    };
+    fetchNews();
+  }, []);
 
-  const handleSummon = () => {
+  // 2. AR/画像生成のリクエスト処理
+  const handleSummon = async () => {
+    if (!selectedNews) return;
     setIsSummoning(true);
-    setTimeout(() => {
+    setProgress(0);
+    setAssetUrl(null);
+
+    try {
+      // ニュースのタイトルをそのまま生成キーワードとして利用
+      const res = await fetch('https://xr-reference.kyouhitotsu-dev.workers.dev/api/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ keyword: selectedNews.title, mode: assetType })
+      });
+      const data = await res.json();
+
+      if (assetType === '2.5d' && data.url) {
+        setAssetUrl(data.url);
+        setIsSummoning(false);
+      } else if (assetType === '3d' && data.taskId) {
+        pollMeshyStatus(data.taskId);
+      } else {
+        setIsSummoning(false);
+        alert("生成に失敗しました。");
+      }
+    } catch (error) {
+      console.error("生成エラー:", error);
       setIsSummoning(false);
-      alert(`「${currentNews?.arKeyword}」をAR空間に召喚しました！`);
-    }, 1000);
+      alert("通信エラーが発生しました。");
+    }
   };
+
+  // 3. 3Dモデル生成の進捗確認（ポーリング）
+  const pollMeshyStatus = (taskId: string) => {
+    const interval = setInterval(async () => {
+      try {
+        const res = await fetch(`https://xr-reference.kyouhitotsu-dev.workers.dev/api/status?taskId=${taskId}`);
+        const data = await res.json();
+
+        if (data.status === 'SUCCEEDED') {
+          clearInterval(interval);
+          setAssetUrl(data.model_urls.glb);
+          setIsSummoning(false);
+        } else if (data.status === 'FAILED') {
+          clearInterval(interval);
+          setIsSummoning(false);
+          alert("3Dモデルの生成に失敗しました。");
+        } else {
+          setProgress(data.progress || 0);
+        }
+      } catch (err) {
+        clearInterval(interval);
+        setIsSummoning(false);
+      }
+    }, 5000); // 5秒おきに確認
+  };
+
+  const categories = newsData ? Object.keys(newsData).filter(k => k !== 'last_updated') : [];
 
   return (
     <div style={{
@@ -56,7 +106,7 @@ export default function HomePage() {
       backgroundColor: '#0b0f19',
       color: '#f3f4f6',
       fontFamily: 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
-      padding: '24px 16px 140px 16px',
+      padding: '24px 16px 200px 16px', // パネルに被らないよう余白を多めに
       maxWidth: '720px',
       margin: '0 auto',
       boxSizing: 'border-box'
@@ -89,113 +139,177 @@ export default function HomePage() {
           WebkitTextFillColor: 'transparent',
           lineHeight: 1.3
         }}>
-          最新ニュース &amp; AR拡張記事
+          最新ニュース &amp; AR拡張
         </h1>
         <p style={{ fontSize: '13px', color: '#9ca3af', margin: 0, lineHeight: 1.6 }}>
-          記事内のキーワードから、直接AR空間に3Dオブジェクトや情景を召喚できます。
+          実際のニュースを選択して、記事の世界をAR空間に召喚できます。
         </p>
       </header>
 
-      {/* カテゴリタブ */}
-      <div style={{
-        display: 'flex',
-        gap: '6px',
-        marginBottom: '20px',
-        padding: '4px',
-        backgroundColor: '#111827',
-        borderRadius: '12px',
-        border: '1px solid rgba(255,255,255,0.08)'
-      }}>
-        {(Object.keys(newsData) as Array<keyof typeof newsData>).map((key) => {
-          const category = newsData[key];
-          const isActive = activeCategory === key;
-          return (
-            <button
-              key={key}
-              onClick={() => setActiveCategory(key)}
-              style={{
-                flex: 1,
-                padding: '10px',
-                borderRadius: '8px',
-                border: 'none',
-                background: isActive ? 'linear-gradient(135deg, #2563eb, #1d4ed8)' : 'transparent',
-                color: isActive ? '#ffffff' : '#9ca3af',
-                fontWeight: isActive ? 700 : 500,
-                fontSize: '13px',
-                cursor: 'pointer',
-                transition: 'all 0.2s ease',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                gap: '6px'
-              }}
-            >
-              <span>{category.icon}</span>
-              <span style={{ textTransform: 'uppercase' }}>{key}</span>
-            </button>
-          );
-        })}
-      </div>
+      {!newsData ? (
+        <div style={{ textAlign: 'center', color: '#9ca3af', padding: '40px' }}>
+          最新のニュースを読み込んでいます...
+        </div>
+      ) : (
+        <>
+          {/* カテゴリタブ */}
+          <div style={{
+            display: 'flex',
+            gap: '6px',
+            marginBottom: '20px',
+            padding: '4px',
+            backgroundColor: '#111827',
+            borderRadius: '12px',
+            border: '1px solid rgba(255,255,255,0.08)',
+            overflowX: 'auto'
+          }}>
+            {categories.map((key) => {
+              const isActive = activeCategory === key;
+              const meta = categoryMeta[key] || { label: key, icon: '📰' };
+              return (
+                <button
+                  key={key}
+                  onClick={() => {
+                    setActiveCategory(key);
+                    setSelectedNews(newsData[key][0]); // タブ切り替え時に最初の記事を選択
+                  }}
+                  style={{
+                    flex: 1,
+                    padding: '10px',
+                    borderRadius: '8px',
+                    border: 'none',
+                    background: isActive ? 'linear-gradient(135deg, #2563eb, #1d4ed8)' : 'transparent',
+                    color: isActive ? '#ffffff' : '#9ca3af',
+                    fontWeight: isActive ? 700 : 500,
+                    fontSize: '13px',
+                    cursor: 'pointer',
+                    transition: 'all 0.2s ease',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: '6px',
+                    whiteSpace: 'nowrap'
+                  }}
+                >
+                  <span>{meta.icon}</span>
+                  <span style={{ textTransform: 'uppercase' }}>{meta.label}</span>
+                </button>
+              );
+            })}
+          </div>
 
-      {/* ニュースリスト */}
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginBottom: '32px' }}>
-        {newsData[activeCategory].items.map((item) => {
-          const isSelected = selectedNews === item.id;
-          return (
-            <div
-              key={item.id}
-              onClick={() => setSelectedNews(item.id)}
-              style={{
-                padding: '14px 16px',
-                borderRadius: '12px',
-                backgroundColor: isSelected ? 'rgba(30, 41, 59, 0.9)' : '#111827',
-                border: isSelected ? '1px solid #3b82f6' : '1px solid rgba(255, 255, 255, 0.05)',
-                cursor: 'pointer',
-                transition: 'all 0.2s ease',
-                boxShadow: isSelected ? '0 0 16px rgba(59, 130, 246, 0.25)' : 'none',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                gap: '12px'
-              }}
-            >
-              <div style={{ flex: 1 }}>
-                <span style={{
-                  fontSize: '10px',
-                  padding: '2px 6px',
-                  borderRadius: '4px',
-                  backgroundColor: isSelected ? 'rgba(59, 130, 246, 0.25)' : 'rgba(255, 255, 255, 0.06)',
-                  color: isSelected ? '#93c5fd' : '#6b7280',
-                  fontWeight: 600,
-                  display: 'inline-block',
-                  marginBottom: '4px'
-                }}>
-                  {item.tag}
-                </span>
-                <div style={{
-                  fontSize: '14px',
-                  fontWeight: 600,
-                  color: isSelected ? '#ffffff' : '#d1d5db',
-                  lineHeight: 1.4
-                }}>
-                  {item.title}
+          {/* ニュースリスト（動的データ対応・スクロール可能） */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginBottom: '32px' }}>
+            {newsData[activeCategory]?.map((item: any, idx: number) => {
+              const isSelected = selectedNews?.url === item.url;
+              const meta = categoryMeta[activeCategory] || { label: activeCategory };
+              
+              return (
+                <div
+                  key={idx}
+                  style={{
+                    padding: '14px 16px',
+                    borderRadius: '12px',
+                    backgroundColor: isSelected ? 'rgba(30, 41, 59, 0.9)' : '#111827',
+                    border: isSelected ? '1px solid #3b82f6' : '1px solid rgba(255, 255, 255, 0.05)',
+                    transition: 'all 0.2s ease',
+                    boxShadow: isSelected ? '0 0 16px rgba(59, 130, 246, 0.25)' : 'none',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: '12px'
+                  }}
+                >
+                  {/* クリックで選択 */}
+                  <div onClick={() => setSelectedNews(item)} style={{ flex: 1, cursor: 'pointer' }}>
+                    <span style={{
+                      fontSize: '10px',
+                      padding: '2px 6px',
+                      borderRadius: '4px',
+                      backgroundColor: isSelected ? 'rgba(59, 130, 246, 0.25)' : 'rgba(255, 255, 255, 0.06)',
+                      color: isSelected ? '#93c5fd' : '#6b7280',
+                      fontWeight: 600,
+                      display: 'inline-block',
+                      marginBottom: '4px',
+                      textTransform: 'uppercase'
+                    }}>
+                      {meta.label}
+                    </span>
+                    <div style={{
+                      fontSize: '14px',
+                      fontWeight: 600,
+                      color: isSelected ? '#ffffff' : '#d1d5db',
+                      lineHeight: 1.4
+                    }}>
+                      {item.title}
+                    </div>
+                  </div>
+                  
+                  {/* 右側：元記事リンク & AR選択マーカー */}
+                  <div style={{
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'flex-end',
+                    gap: '8px'
+                  }}>
+                    <a
+                      href={item.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      onClick={(e) => e.stopPropagation()} // 親のクリックイベントを発火させない
+                      style={{
+                        fontSize: '11px',
+                        color: '#93c5fd',
+                        textDecoration: 'none',
+                        padding: '4px 8px',
+                        backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                        border: '1px solid rgba(59, 130, 246, 0.3)',
+                        borderRadius: '6px',
+                        fontWeight: 600,
+                        whiteSpace: 'nowrap'
+                      }}
+                    >
+                      🔗 記事を読む
+                    </a>
+                    <div onClick={() => setSelectedNews(item)} style={{
+                      fontSize: '11px',
+                      color: isSelected ? '#60a5fa' : '#4b5563',
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '4px'
+                    }}>
+                      <span>AR対象</span>
+                      <span>{isSelected ? '●' : '○'}</span>
+                    </div>
+                  </div>
                 </div>
-              </div>
-              <div style={{
-                fontSize: '11px',
-                color: isSelected ? '#60a5fa' : '#4b5563',
-                fontWeight: 600,
-                display: 'flex',
-                alignItems: 'center',
-                gap: '4px'
-              }}>
-                <span>AR</span>
-                <span>{isSelected ? '●' : '○'}</span>
-              </div>
-            </div>
-          );
-        })}
-      </div>
+              );
+            })}
+          </div>
+        </>
+      )}
+
+      {/* 生成結果の表示エリア */}
+      {assetUrl && (
+        <div style={{
+          marginBottom: '20px',
+          padding: '16px',
+          backgroundColor: '#111827',
+          borderRadius: '16px',
+          border: '1px solid rgba(59, 130, 246, 0.3)',
+          textAlign: 'center'
+        }}>
+          <h3 style={{ fontSize: '13px', color: '#93c5fd', margin: '0 0 12px 0' }}>生成完了</h3>
+          {assetType === '2.5d' ? (
+            <img src={assetUrl} alt="2.5D Asset" style={{ maxWidth: '100%', maxHeight: '250px', borderRadius: '8px' }} />
+          ) : (
+            // @ts-ignore
+            <model-viewer src={assetUrl} ar auto-rotate camera-controls style={{ width: '100%', height: '250px' }} />
+          )}
+        </div>
+      )}
 
       {/* ARアセット生成パネル */}
       <div style={{
@@ -222,19 +336,22 @@ export default function HomePage() {
           flexWrap: 'wrap',
           gap: '8px'
         }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', maxWidth: '50%' }}>
             <span style={{ fontSize: '16px' }}>🔮</span>
-            <span style={{ fontSize: '14px', fontWeight: 700, color: '#f3f4f6' }}>ARアセット生成</span>
-            {currentNews && (
+            <span style={{ fontSize: '14px', fontWeight: 700, color: '#f3f4f6', whiteSpace: 'nowrap' }}>ARアセット生成</span>
+            {selectedNews && (
               <span style={{
                 fontSize: '11px',
                 color: '#c084fc',
                 backgroundColor: 'rgba(192, 132, 252, 0.15)',
                 padding: '2px 6px',
                 borderRadius: '4px',
-                fontWeight: 600
+                fontWeight: 600,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap'
               }}>
-                {currentNews.arKeyword}
+                {selectedNews.title}
               </span>
             )}
           </div>
@@ -281,7 +398,7 @@ export default function HomePage() {
 
         <button
           onClick={handleSummon}
-          disabled={isSummoning}
+          disabled={isSummoning || !selectedNews}
           style={{
             width: '100%',
             padding: '12px',
@@ -293,15 +410,34 @@ export default function HomePage() {
             color: '#ffffff',
             fontSize: '14px',
             fontWeight: 700,
-            cursor: isSummoning ? 'not-allowed' : 'pointer',
+            cursor: isSummoning || !selectedNews ? 'not-allowed' : 'pointer',
             boxShadow: '0 4px 16px rgba(168, 85, 247, 0.35)',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
-            gap: '6px'
+            gap: '6px',
+            position: 'relative',
+            overflow: 'hidden'
           }}
         >
-          <span>{isSummoning ? '⏳ 召喚中...' : '✨ 空間に召喚する'}</span>
+          {isSummoning && assetType === '3d' && (
+            <div 
+              style={{
+                position: 'absolute',
+                top: 0,
+                left: 0,
+                height: '100%',
+                backgroundColor: 'rgba(255, 255, 255, 0.2)',
+                width: `${progress}%`,
+                transition: 'width 0.5s'
+              }}
+            />
+          )}
+          <span style={{ position: 'relative', zIndex: 10 }}>
+            {isSummoning 
+              ? (assetType === '3d' ? `⏳ AIが3Dモデリング中... ${progress}%` : '⏳ AIが画像を生成中...') 
+              : '✨ 空間に召喚する'}
+          </span>
         </button>
       </div>
     </div>

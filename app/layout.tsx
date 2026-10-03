@@ -1,5 +1,5 @@
 export const metadata = {
-  title: 'AR App',
+  title: 'News Summoner',
   description: 'AR Frontend App',
 };
 

@@ -125,6 +125,9 @@ export default function HomePage() {
         @keyframes pulse-glow { 0%, 100% { opacity: 0.6; } 50% { opacity: 1; } }
       `}} />
 
+　　　　　<script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-8323476567735522"
+     crossorigin="anonymous"></script>
+
       <Script type="module" src="https://ajax.googleapis.com/ajax/libs/model-viewer/3.4.0/model-viewer.min.js" />
 
       {isDesktop && currentUrl && (

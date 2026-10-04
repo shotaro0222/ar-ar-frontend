@@ -1,0 +1,149 @@
+/* News Summoner スタイル */
+html, body { margin: 0; padding: 0; background-color: #0b0f19; overflow: hidden; height: 100%; }
+* { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+.ns-root {
+  height: 100vh; height: 100dvh; max-width: 720px; margin: 0 auto;
+  display: flex; flex-direction: column; color: #f3f4f6;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "Hiragino Sans", Roboto, sans-serif;
+}
+.ns-top { flex: 1 1 55%; min-height: 0; display: flex; flex-direction: column; padding: 14px 16px 0; }
+.ns-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 10px; }
+.ns-updated { font-size: 11px; color: #6b7280; white-space: nowrap; }
+.ns-tabs { display: flex; gap: 6px; padding: 4px; background: #111827; border-radius: 12px;
+  border: 1px solid rgba(255,255,255,0.08); overflow-x: auto; margin-bottom: 10px; flex-shrink: 0; scrollbar-width: none; }
+.ns-tab { flex: 1; padding: 9px 10px; border-radius: 8px; border: none; background: transparent; color: #9ca3af;
+  font-size: 13px; font-weight: 500; cursor: pointer; display: flex; align-items: center; justify-content: center;
+  gap: 6px; white-space: nowrap; transition: all .2s ease; }
+.ns-tab[aria-selected="true"] { background: linear-gradient(135deg, #2563eb, #1d4ed8); color: #fff; font-weight: 700; }
+.ns-list { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 8px;
+  padding-bottom: 12px; overscroll-behavior: contain; }
+.ns-item { display: flex; align-items: stretch; gap: 10px; padding: 0; border-radius: 12px; background: #111827;
+  border: 1px solid rgba(255,255,255,0.05); transition: all .2s ease; }
+.ns-item.is-speaking { background: rgba(30,41,59,0.9); border-color: #a855f7; box-shadow: 0 0 16px rgba(168,85,247,0.3); }
+.ns-item-main { flex: 1; text-align: left; background: none; border: none; color: inherit; font: inherit;
+  padding: 12px 0 12px 14px; cursor: pointer; display: flex; gap: 10px; align-items: center; min-width: 0; }
+.ns-item-main:hover .ns-title { color: #fff; }
+.ns-item-main:focus-visible { outline: 2px solid #60a5fa; outline-offset: -2px; border-radius: 12px; }
+.ns-speak-icon { flex-shrink: 0; width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center;
+  background: rgba(255,255,255,0.06); font-size: 14px; }
+.is-speaking .ns-speak-icon { background: rgba(168,85,247,0.25); }
+.ns-title { font-size: 14px; font-weight: 600; color: #d1d5db; line-height: 1.45; }
+.is-speaking .ns-title { color: #fff; }
+.ns-link { align-self: center; margin-right: 12px; font-size: 11px; color: #93c5fd; text-decoration: none;
+  padding: 5px 8px; background: rgba(59,130,246,0.1); border: 1px solid rgba(59,130,246,0.3);
+  border-radius: 6px; font-weight: 600; white-space: nowrap; }
+.ns-bars { display: inline-flex; gap: 2px; align-items: flex-end; height: 14px; }
+.ns-bars i { width: 3px; background: #c084fc; border-radius: 2px; animation: ns-bar .9s ease-in-out infinite; }
+.ns-bars i:nth-child(2) { animation-delay: .15s; } .ns-bars i:nth-child(3) { animation-delay: .3s; }
+@keyframes ns-bar { 0%,100% { height: 4px; } 50% { height: 14px; } }
+
+.ns-stage { flex: 0 0 45%; min-height: 260px; position: relative; display: flex; flex-direction: column;
+  border-top: 1px solid rgba(147,197,253,0.18);
+  background: radial-gradient(ellipse at 50% 85%, rgba(59,130,246,0.28), transparent 60%),
+              radial-gradient(ellipse at 50% 100%, rgba(168,85,247,0.25), transparent 70%), #0b0f19; }
+.ns-bubble-wrap { padding: 12px 16px 0; position: relative; z-index: 2; }
+.ns-bubble { position: relative; background: #f8fafc; color: #0f172a; border-radius: 16px; padding: 10px 14px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.45); max-height: min(190px, 24dvh); overflow-y: auto; animation: ns-pop .25s ease-out; }
+.ns-bubble-tail { width: 0; height: 0; margin: 0 auto; border: 10px solid transparent;
+  border-top-color: #f8fafc; border-bottom: 0; }
+.ns-bubble-label { display: inline-flex; align-items: center; gap: 6px; font-size: 10px; font-weight: 700;
+  color: #7c3aed; background: #ede9fe; padding: 2px 6px; border-radius: 4px; margin-bottom: 4px; }
+.ns-bubble-title { font-size: 14px; font-weight: 700; line-height: 1.5; }
+.ns-bubble-hint { font-size: 13px; font-weight: 600; line-height: 1.5; color: #334155; }
+.ns-bubble-summary { font-size: 13px; line-height: 1.7; color: #334155; margin: 6px 0 0; }
+.ns-bubble-summary span { transition: background-color .2s ease; border-radius: 3px; }
+.ns-bubble .is-reading { background: #ede9fe; color: #4c1d95; box-shadow: 0 0 0 2px #ede9fe; }
+.ns-loading { color: #7c3aed; font-weight: 600; }
+.ns-dots i { font-style: normal; animation: ns-blink 1.2s infinite; }
+.ns-dots i:nth-child(2) { animation-delay: .2s; } .ns-dots i:nth-child(3) { animation-delay: .4s; }
+@keyframes ns-blink { 0%, 100% { opacity: .2; } 50% { opacity: 1; } }
+.ns-bubble-source { font-size: 10px; color: #94a3b8; margin-top: 6px; text-align: right; }
+@keyframes ns-pop { from { transform: scale(.94); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+.ns-viewer-wrap { flex: 1; min-height: 0; position: relative; }
+model-viewer { width: 100%; height: 100%; --poster-color: transparent; background: transparent; }
+model-viewer:focus { outline: none; }
+
+.ns-chip { border: 1px solid rgba(147,197,253,0.3); background: rgba(17,24,39,0.85); color: #e5e7eb;
+  font-size: 12px; font-weight: 600; padding: 8px 12px; border-radius: 9999px; cursor: pointer;
+  backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
+.ns-ar { background: linear-gradient(135deg, #a855f7 0%, #3b82f6 50%, #06b6d4 100%); border: none; color: #fff;
+  box-shadow: 0 4px 16px rgba(168,85,247,0.35); }
+.ns-qr { position: fixed; top: 24px; right: 24px; width: 220px; background: rgba(17,24,39,0.9);
+  backdrop-filter: blur(8px); padding: 16px; border-radius: 16px; border: 1px solid rgba(59,130,246,0.3);
+  text-align: center; box-shadow: 0 8px 32px rgba(0,0,0,0.5); z-index: 50; }
+.ns-state { text-align: center; color: #9ca3af; padding: 32px 8px; font-size: 13px; }
+@media (prefers-reduced-motion: reduce) { .ns-bars i, .ns-bubble { animation: none; } }
+
+/* ---------- 通常画面の操作ボタン ---------- */
+.ns-controls { position: absolute; left: 10px; right: 10px; bottom: 10px; display: flex; flex-wrap: wrap;
+  gap: 6px; align-items: center; pointer-events: none; z-index: 3; }
+.ns-controls > * { pointer-events: auto; }
+.ns-chip:disabled { opacity: .45; cursor: not-allowed; }
+.ns-chip.is-on { background: rgba(124,58,237,0.85); border-color: #c4b5fd; color: #fff; }
+.ns-chip-primary { background: linear-gradient(135deg, #7c3aed, #2563eb); border: none; color: #fff; }
+.ns-ar-btn { position: absolute; right: 10px; top: 10px; padding: 6px 10px; font-size: 11px; }
+.ns-ask-link { margin-top: 8px; display: inline-flex; align-items: center; gap: 4px; border: none; cursor: pointer;
+  background: #ede9fe; color: #6d28d9; font-size: 12px; font-weight: 700; padding: 5px 10px; border-radius: 9999px; }
+.ns-answer-q { font-size: 12px; color: #64748b; margin-bottom: 2px; }
+
+/* ---------- 現実空間モード（カメラ映像の上にアバター） ---------- */
+.ns-camera { position: fixed; inset: 0; width: 100%; height: 100%; object-fit: cover; z-index: 30; background: #000; display: none; }
+.is-reality .ns-camera { display: block; }
+.is-reality .ns-top, .is-reality .ns-bubble-wrap, .is-reality .ns-controls, .is-reality .ns-qr { display: none; }
+.is-reality .ns-stage { position: fixed; inset: 0; z-index: 31; background: transparent; border: 0; min-height: 0; }
+.is-reality.ns-camera-error .ns-stage {
+  background: radial-gradient(ellipse at 50% 80%, rgba(59,130,246,0.35), transparent 60%), #0b0f19; }
+.is-reality .ns-ar-btn { top: auto; bottom: 92px; }
+
+/* model-viewer の中に置くオーバーレイ（現実空間モードと WebXR の AR 中に表示） */
+.ns-overlay { position: absolute; inset: 0; display: none; flex-direction: column; justify-content: space-between;
+  pointer-events: none; padding: max(12px, env(safe-area-inset-top)) 12px max(12px, env(safe-area-inset-bottom)); }
+.ns-overlay.is-shown { display: flex; }
+.ns-overlay > * { pointer-events: auto; }
+.ns-overlay .ns-bubble { max-height: 34dvh; background: rgba(248,250,252,0.94); }
+.ns-overlay-note { align-self: center; font-size: 11px; color: #fff; background: rgba(0,0,0,0.55);
+  padding: 4px 10px; border-radius: 9999px; margin-top: 8px; }
+.ns-remote { display: flex; align-items: center; justify-content: center; gap: 8px; padding: 8px;
+  background: rgba(17,24,39,0.82); border: 1px solid rgba(147,197,253,0.3); border-radius: 20px;
+  backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
+.ns-remote button { width: 46px; height: 46px; border-radius: 50%; border: 1px solid rgba(255,255,255,0.15);
+  background: rgba(255,255,255,0.08); color: #fff; font-size: 18px; cursor: pointer; display: grid; place-items: center; }
+.ns-remote button.is-main { width: 58px; height: 58px; font-size: 22px; border: none;
+  background: linear-gradient(135deg, #a855f7, #3b82f6); box-shadow: 0 4px 16px rgba(168,85,247,0.45); }
+.ns-remote button:disabled { opacity: .4; }
+.ns-remote .ns-remote-exit { font-size: 12px; font-weight: 700; width: auto; padding: 0 12px; border-radius: 9999px; height: 36px; }
+
+/* ---------- 質問シート ---------- */
+.ask-backdrop { position: fixed; inset: 0; z-index: 60; background: rgba(0,0,0,0.45); display: flex; align-items: flex-end;
+  justify-content: center; }
+model-viewer .ask-backdrop { position: absolute; }
+.ask-sheet { width: 100%; max-width: 720px; max-height: 62dvh; display: flex; flex-direction: column; gap: 10px;
+  background: #0f172a; color: #e5e7eb; border-radius: 20px 20px 0 0; border: 1px solid rgba(147,197,253,0.25);
+  padding: 14px 14px max(14px, env(safe-area-inset-bottom)); box-shadow: 0 -12px 40px rgba(0,0,0,0.6);
+  animation: ask-up .22s ease-out; }
+@keyframes ask-up { from { transform: translateY(24px); opacity: 0; } to { transform: none; opacity: 1; } }
+.ask-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
+.ask-title { font-size: 15px; font-weight: 800; }
+.ask-context { font-size: 11px; color: #94a3b8; margin-top: 2px; line-height: 1.4; }
+.ask-close { background: rgba(255,255,255,0.08); border: none; color: #e5e7eb; width: 32px; height: 32px; border-radius: 50%; cursor: pointer; flex-shrink: 0; }
+.ask-terms { display: flex; flex-wrap: wrap; gap: 6px; }
+.ask-term { border: 1px solid rgba(196,181,253,0.45); background: rgba(124,58,237,0.18); color: #ddd6fe; font-size: 12px;
+  font-weight: 600; padding: 6px 10px; border-radius: 9999px; cursor: pointer; }
+.ask-term:disabled { opacity: .5; }
+.ask-terms-note { font-size: 12px; color: #94a3b8; }
+.ask-log { flex: 1; min-height: 90px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; padding: 4px 2px; }
+.ask-empty { font-size: 13px; color: #94a3b8; line-height: 1.6; }
+.ask-msg { max-width: 85%; padding: 8px 12px; border-radius: 14px; font-size: 13px; line-height: 1.6; white-space: pre-wrap; }
+.ask-user { align-self: flex-end; background: #2563eb; color: #fff; border-bottom-right-radius: 4px; }
+.ask-assistant { align-self: flex-start; background: #f8fafc; color: #0f172a; border-bottom-left-radius: 4px; }
+.ask-typing { color: #7c3aed; font-weight: 600; }
+.ask-error { font-size: 12px; color: #fca5a5; }
+.ask-form { display: flex; gap: 6px; }
+.ask-input { flex: 1; min-width: 0; background: #1e293b; color: #f8fafc; border: 1px solid rgba(147,197,253,0.3);
+  border-radius: 9999px; padding: 10px 14px; font-size: 16px; outline: none; }
+.ask-input:focus { border-color: #a78bfa; }
+.ask-mic, .ask-send { border: none; border-radius: 9999px; cursor: pointer; font-weight: 700; }
+.ask-mic { width: 44px; height: 44px; background: rgba(255,255,255,0.1); color: #fff; font-size: 18px; flex-shrink: 0; }
+.ask-mic.is-on { background: #dc2626; animation: ns-blink 1.2s infinite; }
+.ask-send { padding: 0 16px; background: linear-gradient(135deg, #7c3aed, #2563eb); color: #fff; font-size: 14px; }
+.ask-send:disabled { opacity: .45; }

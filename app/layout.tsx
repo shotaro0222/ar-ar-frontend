@@ -1,7 +1,11 @@
+import './globals.css';
+
 export const metadata = {
   title: 'News Summoner',
-  description: 'AR Frontend App',
+  description: 'ニュースをアバターが読み上げ、現実空間でも聞けるニュースサマリー',
 };
+
+export const viewport = { width: 'device-width', initialScale: 1, viewportFit: 'cover' };
 
 export default function RootLayout({
   children,

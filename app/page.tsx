@@ -1,3 +1,5 @@
+"use client"; // ← この1行をファイルの先頭に追加します
+
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import Script from 'next/script';
 import AskSheet, { ChatTurn } from './components/AskSheet';

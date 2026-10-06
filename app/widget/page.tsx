@@ -1,10 +1,10 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import Script from 'next/script';
 
-export default function WidgetPage() {
+function WidgetContent() {
   const searchParams = useSearchParams();
   const keyword = searchParams.get('keyword') || 'ニュース';
   
@@ -98,5 +98,21 @@ export default function WidgetPage() {
         )}
       </div>
     </div>
+  );
+}
+
+export default function WidgetPage() {
+  return (
+    <Suspense fallback={
+      <div style={{
+        width: '100%', minHeight: '100vh', backgroundColor: 'transparent',
+        fontFamily: 'system-ui, sans-serif', padding: '12px', boxSizing: 'border-box',
+        display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#9ca3af', fontSize: '12px'
+      }}>
+        読み込み中...
+      </div>
+    }>
+      <WidgetContent />
+    </Suspense>
   );
 }

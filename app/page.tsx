@@ -1,13 +1,7 @@
 'use client';
 
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import Script from 'next/script';
-import AskSheet, { ChatTurn } from './components/AskSheet';
-import { pickJapaneseVoice, splitSentences, startTalk, stopTalk, TalkHolder } from './lib/speech';
-
-const API_BASE = 'https://xr-reference.kyouhitotsu-dev.workers.dev';
-// アバター（RobotExpressive / CC0）。public/models に同梱して外部依存をなくしている
-const AVATAR_SRC = '/models/RobotExpressive.glb';
 
 const categoryMeta: Record<string, { label: string; icon: string }> = {
   it: { label: 'IT', icon: '⚡' },
@@ -16,585 +10,303 @@ const categoryMeta: Record<string, { label: string; icon: string }> = {
   funny: { label: 'オモシロ', icon: '🎭' }
 };
 
-type NewsItem = { title: string; url: string; summary?: string; summaryKind?: 'ai' | 'rss'; source?: string };
-type NewsData = Record<string, NewsItem[] | string> & { last_updated?: string };
-type Current = { cat: string; item: NewsItem };
-type Bubble = {
-  kind: 'hint' | 'news' | 'answer';
-  label?: string;
-  title: string;
-  sentences?: string[];
-  source?: string;
-  loading?: boolean;
-};
-
-const HINT_BUBBLE: Bubble = {
-  kind: 'hint',
-  title: 'こんにちは！ニュースのタイトルをタップすると、記事の中身をボクが読み上げるよ。わからない言葉は「💬 質問」で聞いてね🎙️'
-};
-
-// アバターのアニメーション名（RobotExpressive.glb に含まれるもの）
-const ANIM = { idle: 'Idle', talk: 'Yes', wave: 'Wave', think: 'Standing' } as const;
-
-const itemKey = (cat: string, item: NewsItem) => `${cat}::${item.title}::${item.url}`;
-
-function formatUpdated(iso?: string) {
-  if (!iso) return '';
-  const d = new Date(iso);
-  if (isNaN(d.getTime())) return '';
-  return d.toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' });
-}
-
-const listOf = (data: NewsData | null, cat: string) => (Array.isArray(data?.[cat]) ? (data![cat] as NewsItem[]) : []);
-const categoriesOf = (data: NewsData | null) =>
-  data ? Object.keys(data).filter(k => k !== 'last_updated' && listOf(data, k).length > 0) : [];
-
 export default function HomePage() {
-  const [newsData, setNewsData] = useState<NewsData | null>(null);
-  const [loadError, setLoadError] = useState(false);
+  const [newsData, setNewsData] = useState<any>(null);
   const [activeCategory, setActiveCategory] = useState<string>('it');
-  const [speakingKey, setSpeakingKey] = useState<string | null>(null);
-  const [bubble, setBubble] = useState<Bubble>(HINT_BUBBLE);
-  const [activeSeg, setActiveSeg] = useState(-1); // 吹き出し内で今読んでいる文（-1 = タイトル）
-  const [animation, setAnimation] = useState<string>(ANIM.idle);
-  const [muted, setMuted] = useState(false);
-  const [showQr, setShowQr] = useState(false);
+  const [selectedNews, setSelectedNews] = useState<any>(null);
+  
+  const [assetType, setAssetType] = useState<'2.5d' | '3d'>('3d');
+  const [isSummoning, setIsSummoning] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const [assetUrl, setAssetUrl] = useState<string | null>(null);
+  const [isDesktop, setIsDesktop] = useState(false);
   const [currentUrl, setCurrentUrl] = useState('');
-  const [current, setCurrent] = useState<Current | null>(null);
-  const [autoPlay, setAutoPlay] = useState(false);
 
-  // 現実空間モード（カメラ映像の上にアバター）と WebXR の AR
-  const [reality, setReality] = useState(false);
-  const [cameraState, setCameraState] = useState<'off' | 'starting' | 'on' | 'error'>('off');
-  const [arActive, setArActive] = useState(false);
-
-  // 質問
-  const [askOpen, setAskOpen] = useState(false);
-  const [chat, setChat] = useState<ChatTurn[]>([]);
-  const [asking, setAsking] = useState(false);
-  const [termsByUrl, setTermsByUrl] = useState<Record<string, string[]>>({});
-  const [termsLoading, setTermsLoading] = useState(false);
-
-  const talkRef = useRef<TalkHolder>({ session: null, timer: null, utterances: [] });
-  const voiceRef = useRef<SpeechSynthesisVoice | null>(null);
-  const viewerRef = useRef<any>(null);
-  const videoRef = useRef<HTMLVideoElement | null>(null);
-  const streamRef = useRef<MediaStream | null>(null);
-  const autoRef = useRef(false);
-  const newsRef = useRef<NewsData | null>(null);
-  const currentRef = useRef<Current | null>(null);
-  const speakingKeyRef = useRef<string | null>(null);
-  const mutedRef = useRef(false);
-  const chatForRef = useRef<string>('');
-  const waveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  newsRef.current = newsData;
-  currentRef.current = current;
-  speakingKeyRef.current = speakingKey;
-  mutedRef.current = muted;
-
-  // ---------------- ニュース取得 ----------------
-  const fetchNews = useCallback(async () => {
-    setLoadError(false);
-    try {
-      const res = await fetch(`${API_BASE}/api/news`);
-      if (!res.ok) throw new Error(String(res.status));
-      const data: NewsData = await res.json();
-      // 中身（要約）があるニュースだけを表示する。要約付きが1件もない旧形式のデータはそのまま表示
-      const hasAnySummary = Object.values(data).some(v => Array.isArray(v) && v.some(i => i?.summary));
-      if (hasAnySummary) {
-        for (const k of Object.keys(data)) {
-          const v = data[k];
-          if (Array.isArray(v)) data[k] = v.filter(i => i?.summary);
-        }
-      }
-      setNewsData(data);
-      const first = categoriesOf(data)[0];
-      if (first) setActiveCategory(prev => (listOf(data, prev).length ? prev : first));
-    } catch (error) {
-      console.error('ニュースの取得に失敗しました', error);
-      setLoadError(true);
-    }
-  }, []);
+  // 実装3: プレミアムユーザー判定（テスト用トグル）
+  const [isPremium, setIsPremium] = useState(false);
 
   useEffect(() => {
     setCurrentUrl(window.location.href);
-    const checkDevice = () => setShowQr(window.innerWidth > 1100);
+    const checkDevice = () => setIsDesktop(window.innerWidth > 768);
     checkDevice();
     window.addEventListener('resize', checkDevice);
-    try { if (localStorage.getItem('ns-muted') === '1') setMuted(true); } catch { /* noop */ }
 
-    // 音声リストは非同期でロードされるブラウザがあるので両方で拾う
-    const loadVoice = () => { voiceRef.current = pickJapaneseVoice(); };
-    if ('speechSynthesis' in window) {
-      loadVoice();
-      window.speechSynthesis.addEventListener?.('voiceschanged', loadVoice);
-    }
+    const fetchNews = async () => {
+      try {
+        const res = await fetch('https://xr-reference.kyouhitotsu-dev.workers.dev/api/news');
+        const data = await res.json();
+        setNewsData(data);
+        const firstCategory = Object.keys(data).find(k => k !== 'last_updated');
+        if (firstCategory && data[firstCategory]?.[0]) {
+          setActiveCategory(firstCategory);
+          setSelectedNews(data[firstCategory][0]);
+        }
+      } catch (error) {
+        console.error("ニュースの取得に失敗しました", error);
+      }
+    };
     fetchNews();
 
-    const talk = talkRef.current;
-    const stopOnHide = () => stopTalk(talk);
-    window.addEventListener('pagehide', stopOnHide);
-    return () => {
-      window.removeEventListener('resize', checkDevice);
-      window.removeEventListener('pagehide', stopOnHide);
-      window.speechSynthesis?.removeEventListener?.('voiceschanged', loadVoice);
-      stopTalk(talk);
-      streamRef.current?.getTracks().forEach(t => t.stop());
-    };
-  }, [fetchNews]);
-
-  // WebXR の AR セッション開始・終了を検知（AR中もニュースの操作パネルを表示する）
-  useEffect(() => {
-    const mv = viewerRef.current;
-    if (!mv) return;
-    const onStatus = (e: any) => {
-      const status = e?.detail?.status;
-      if (status === 'session-started' || status === 'object-placed') setArActive(true);
-      if (status === 'not-presenting' || status === 'failed') setArActive(false);
-    };
-    mv.addEventListener('ar-status', onStatus);
-    return () => mv.removeEventListener('ar-status', onStatus);
+    return () => window.removeEventListener('resize', checkDevice);
   }, []);
 
-  // 今読んでいる文が吹き出しの中で見えるようにスクロール
-  useEffect(() => {
-    document.querySelectorAll<HTMLElement>('.ns-bubble').forEach(box => {
-      const el = box.querySelector('.is-reading') as HTMLElement | null;
-      if (!el) { if (activeSeg === -1) box.scrollTop = 0; return; }
-      const top = el.offsetTop; // 吹き出し(position:relative)基準
-      if (top < box.scrollTop || top + el.offsetHeight > box.scrollTop + box.clientHeight) {
-        box.scrollTo({ top: Math.max(0, top - 24), behavior: 'smooth' });
-      }
-    });
-  }, [activeSeg, bubble]);
+  const handleSummon = async () => {
+    if (!selectedNews) return;
+    setIsSummoning(true);
+    setProgress(0);
+    setAssetUrl(null);
 
-  // アニメーション切り替え時に確実に再生させる
-  useEffect(() => {
-    const mv = viewerRef.current;
-    if (mv && typeof mv.play === 'function') {
-      try { mv.play(); } catch { /* モデル未ロード時は無視 */ }
-    }
-  }, [animation]);
-
-  // ---------------- 読み上げ ----------------
-  const endTalkUI = useCallback(() => {
-    setSpeakingKey(null);
-    setActiveSeg(-1);
-    setAnimation(ANIM.idle);
-  }, []);
-
-  const stopAll = useCallback(() => {
-    autoRef.current = false;
-    setAutoPlay(false);
-    stopTalk(talkRef.current);
-    endTalkUI();
-  }, [endTalkUI]);
-
-  // 全カテゴリを1列に並べたリスト（連続再生・前後移動用）
-  const flatList = useCallback((): Current[] => {
-    const data = newsRef.current;
-    return categoriesOf(data).flatMap(cat => listOf(data, cat).map(item => ({ cat, item })));
-  }, []);
-
-  const readNewsRef = useRef<(cat: string, item: NewsItem, opts?: { auto?: boolean }) => void>(() => {});
-
-  const playStep = useCallback((dir: 1 | -1) => {
-    const list = flatList();
-    if (!list.length) return;
-    const cur = currentRef.current;
-    const idx = cur ? list.findIndex(x => x.item.url === cur.item.url) : -1;
-    const next = idx < 0 ? list[0] : list[(idx + dir + list.length) % list.length];
-    setActiveCategory(next.cat);
-    readNewsRef.current(next.cat, next.item, { auto: true });
-  }, [flatList]);
-
-  const readNews = useCallback((cat: string, item: NewsItem, opts: { auto?: boolean } = {}) => {
-    const key = itemKey(cat, item);
-    // 読み上げ中の同じニュースをもう一度タップ → 停止
-    if (!opts.auto && speakingKeyRef.current === key) {
-      stopAll();
-      return;
-    }
-
-    const label = categoryMeta[cat]?.label || cat;
-    const hasAiSummary = item.summaryKind === 'ai' && !!item.summary;
-    setCurrent({ cat, item });
-    if (chatForRef.current !== item.url) { chatForRef.current = item.url; setChat([]); }
-    setBubble({ kind: 'news', label, title: item.title, sentences: hasAiSummary ? splitSentences(item.summary!) : [], source: item.source, loading: !hasAiSummary });
-    setActiveSeg(-1);
-    setSpeakingKey(key);
-    setAnimation(ANIM.talk);
-
-    const talk = startTalk(talkRef.current, {
-      muted: mutedRef.current,
-      voice: voiceRef.current,
-      onSeg: setActiveSeg,
-      onDone: () => {
-        endTalkUI();
-        // 連続再生中なら次のニュースへ
-        if (autoRef.current) setTimeout(() => { if (autoRef.current) playStep(1); }, 900);
-      }
-    });
-
-    // 記事の中身を受け取ったら、1文ずつ読み上げに追加する
-    const deliver = (summary?: string | null) => {
-      if (!talk.alive()) return;
-      const sentences = summary ? splitSentences(summary) : [];
-      setBubble(b => ({ ...b, sentences, loading: false }));
-      if (sentences.length) sentences.forEach((t, i) => talk.enqueue(t, i));
-      else talk.enqueue('このニュースの中身を取得できませんでした。詳しくは記事ボタンからご覧ください。', -1);
-      talk.ready(item.title.length + (summary?.length || 30));
-    };
-
-    // まずタイトルを読む（タップ直後に発話を始めることで iOS の自動再生制限も回避）
-    talk.enqueue(`${label}のニュースです。${item.title}。`, -1);
-    if (hasAiSummary) return deliver(item.summary);
-
-    // 記事ページから作ったAI要約を取得（サーバー側でキャッシュされるので2回目以降は速い）
-    const ctrl = new AbortController();
-    const abortTimer = setTimeout(() => ctrl.abort(), 25000);
-    fetch(`${API_BASE}/api/summary?url=${encodeURIComponent(item.url)}`, { signal: ctrl.signal })
-      .then(r => (r.ok ? r.json() : null))
-      .then((d: { summary?: string | null; summaryKind?: 'ai' | 'rss' } | null) => {
-        if (d?.summary) {
-          // 次回タップ時はすぐ読めるよう一覧のデータも更新
-          setNewsData(prev => {
-            if (!prev || !Array.isArray(prev[cat])) return prev;
-            return { ...prev, [cat]: listOf(prev, cat).map(i => (i.url === item.url ? { ...i, summary: d.summary!, summaryKind: d.summaryKind } : i)) };
-          });
-        }
-        deliver(d?.summary || item.summary);
-      })
-      .catch(() => deliver(item.summary))
-      .finally(() => clearTimeout(abortTimer));
-  }, [stopAll, endTalkUI, playStep]);
-  readNewsRef.current = readNews;
-
-  const toggleAutoPlay = () => {
-    if (autoRef.current) { stopAll(); return; }
-    autoRef.current = true;
-    setAutoPlay(true);
-    const cur = currentRef.current;
-    if (speakingKeyRef.current) return; // 今の読み上げが終わったら次へ進む
-    if (cur) readNews(cur.cat, cur.item, { auto: true });
-    else playStep(1);
-  };
-
-  const greet = () => {
-    if (speakingKeyRef.current || asking) return;
-    setBubble(HINT_BUBBLE);
-    setAnimation(ANIM.wave);
-    if (waveTimer.current) clearTimeout(waveTimer.current);
-    waveTimer.current = setTimeout(() => setAnimation(a => (a === ANIM.wave ? ANIM.idle : a)), 2200);
-  };
-
-  const toggleMute = () => {
-    const next = !muted;
-    setMuted(next);
-    if (next) window.speechSynthesis?.cancel();
-    try { localStorage.setItem('ns-muted', next ? '1' : '0'); } catch { /* noop */ }
-  };
-
-  // ---------------- 質問（わからない言葉を聞く） ----------------
-  const openAsk = () => {
-    setAskOpen(true);
-    const cur = currentRef.current;
-    if (!cur || termsByUrl[cur.item.url]) return;
-    setTermsLoading(true);
-    fetch(`${API_BASE}/api/terms?url=${encodeURIComponent(cur.item.url)}`)
-      .then(r => (r.ok ? r.json() : { terms: [] }))
-      .then(d => setTermsByUrl(m => ({ ...m, [cur.item.url]: Array.isArray(d?.terms) ? d.terms : [] })))
-      .catch(() => setTermsByUrl(m => ({ ...m, [cur.item.url]: [] })))
-      .finally(() => setTermsLoading(false));
-  };
-
-  const ask = async (question: string) => {
-    const cur = currentRef.current;
-    const history = chat;
-    stopAll();
-    setChat(c => [...c, { role: 'user', content: question }]);
-    setAsking(true);
-    setBubble({ kind: 'answer', label: '質問', title: question, loading: true });
-    setAnimation(ANIM.think);
-
-    let answer = '';
     try {
-      const ctrl = new AbortController();
-      const t = setTimeout(() => ctrl.abort(), 30000);
-      const res = await fetch(`${API_BASE}/api/ask`, {
+      const res = await fetch('https://xr-reference.kyouhitotsu-dev.workers.dev/api/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ question, url: cur?.item.url, history }),
-        signal: ctrl.signal
+        body: JSON.stringify({ keyword: selectedNews.title, mode: assetType })
       });
-      clearTimeout(t);
-      const d = await res.json().catch(() => null);
-      answer = d?.answer || '';
-    } catch { /* 下でまとめて処理 */ }
-    if (!answer) answer = 'ごめんなさい、いまは答えを用意できませんでした。少ししてからもう一度聞いてください。';
-    setAsking(false);
-    setChat(c => [...c, { role: 'assistant', content: answer }]);
+      const data = await res.json();
 
-    // アバターが声と吹き出しで答える
-    const sentences = splitSentences(answer);
-    setBubble({ kind: 'answer', label: '質問', title: question, sentences });
-    setSpeakingKey('answer');
-    setActiveSeg(-1);
-    setAnimation(ANIM.talk);
-    const talk = startTalk(talkRef.current, { muted: mutedRef.current, voice: voiceRef.current, onSeg: setActiveSeg, onDone: endTalkUI });
-    sentences.forEach((s, i) => talk.enqueue(s, i));
-    talk.ready(answer.length);
-  };
-
-  // ---------------- 現実空間モード ----------------
-  const enterReality = async () => {
-    setReality(true);
-    setCameraState('starting');
-    try {
-      if (!navigator.mediaDevices?.getUserMedia) throw new Error('unsupported');
-      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } }, audio: false });
-      streamRef.current = stream;
-      const v = videoRef.current;
-      if (v) {
-        v.srcObject = stream;
-        await v.play().catch(() => {});
+      if (assetType === '2.5d' && data.url) {
+        setAssetUrl(data.url);
+        setIsSummoning(false);
+      } else if (assetType === '3d' && data.taskId) {
+        pollMeshyStatus(data.taskId);
+      } else {
+        setIsSummoning(false);
+        alert("生成に失敗しました。");
       }
-      setCameraState('on');
-    } catch (e) {
-      console.warn('camera unavailable', e);
-      setCameraState('error');
+    } catch (error) {
+      console.error("生成エラー:", error);
+      setIsSummoning(false);
+      alert("通信エラーが発生しました。");
     }
   };
 
-  const exitReality = () => {
-    streamRef.current?.getTracks().forEach(t => t.stop());
-    streamRef.current = null;
-    if (videoRef.current) videoRef.current.srcObject = null;
-    setCameraState('off');
-    setReality(false);
+  const pollMeshyStatus = (taskId: string) => {
+    const interval = setInterval(async () => {
+      try {
+        const res = await fetch(`https://xr-reference.kyouhitotsu-dev.workers.dev/api/status?taskId=${taskId}`);
+        const data = await res.json();
+
+        if (data.status === 'SUCCEEDED') {
+          clearInterval(interval);
+          setAssetUrl(data.model_urls.glb);
+          setIsSummoning(false);
+        } else if (data.status === 'FAILED') {
+          clearInterval(interval);
+          setIsSummoning(false);
+          alert("3Dモデルの生成に失敗しました。");
+        } else {
+          setProgress(data.progress || 0);
+        }
+      } catch (err) {
+        clearInterval(interval);
+        setIsSummoning(false);
+      }
+    }, 5000);
   };
 
-  // ---------------- 表示 ----------------
-  const categories = categoriesOf(newsData);
-  const items = listOf(newsData, activeCategory);
-  const isTalking = speakingKey !== null;
-  const overlayShown = reality || arActive;
-  const currentTerms = current ? termsByUrl[current.item.url] || [] : [];
-
-  const renderBubble = () => (
-    <div key={bubble.kind + bubble.title} className="ns-bubble" role="status" aria-live="polite">
-      {bubble.kind === 'hint' ? (
-        <div className="ns-bubble-hint">{bubble.title}</div>
-      ) : (
-        <>
-          <span className="ns-bubble-label">
-            {bubble.kind === 'answer' ? '💬 質問への答え' : `${bubble.label}のニュース`}
-            {isTalking && <span className="ns-bars" aria-hidden="true"><i /><i /><i /></span>}
-          </span>
-          {bubble.kind === 'answer' ? (
-            <div className="ns-answer-q">Q. {bubble.title}</div>
-          ) : (
-            <div className={`ns-bubble-title${isTalking && activeSeg === -1 ? ' is-reading' : ''}`}>{bubble.title}</div>
-          )}
-          {bubble.loading ? (
-            <p className="ns-bubble-summary ns-loading">
-              {bubble.kind === 'answer' ? '考えています' : '記事を読み込んでいます'}
-              <span className="ns-dots"><i>.</i><i>.</i><i>.</i></span>
-            </p>
-          ) : bubble.sentences && bubble.sentences.length > 0 ? (
-            <p className="ns-bubble-summary">
-              {bubble.sentences.map((t, i) => (
-                <span key={i} className={isTalking && activeSeg === i ? 'is-reading' : undefined}>{t}</span>
-              ))}
-            </p>
-          ) : (
-            <p className="ns-bubble-summary">このニュースの中身を取得できませんでした。詳しくは「🔗 記事」からご覧ください。</p>
-          )}
-          {bubble.kind === 'news' && bubble.source && <div className="ns-bubble-source">出典：{bubble.source}</div>}
-          {!bubble.loading && (
-            <button className="ns-ask-link" onClick={openAsk}>
-              💬 {bubble.kind === 'answer' ? 'ほかにも質問する' : 'わからない言葉を質問する'}
-            </button>
-          )}
-        </>
-      )}
-    </div>
-  );
-
-  const askSheet = (
-    <AskSheet
-      open={askOpen}
-      onClose={() => setAskOpen(false)}
-      newsTitle={current?.item.title}
-      terms={currentTerms}
-      termsLoading={termsLoading}
-      messages={chat}
-      busy={asking}
-      onSend={ask}
-      onBeforeListen={stopAll}
-    />
-  );
+  const categories = newsData ? Object.keys(newsData).filter(k => k !== 'last_updated') : [];
 
   return (
-    <div className={`ns-root${reality ? ' is-reality' : ''}${cameraState === 'error' ? ' ns-camera-error' : ''}`}>
-      <Script
-        async
-        src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-8323476567735522"
-        crossOrigin="anonymous"
-      />
+    <div style={{
+      minHeight: '100vh', backgroundColor: '#0b0f19', color: '#f3f4f6',
+      fontFamily: 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+      padding: '24px 16px 200px 16px', maxWidth: '720px', margin: '0 auto',
+      boxSizing: 'border-box', position: 'relative'
+    }}>
+      
+      <style dangerouslySetInnerHTML={{__html: `
+        html, body { margin: 0; padding: 0; background-color: #0b0f19; overflow-x: hidden; }
+        model-viewer:focus { outline: none; }
+        model-viewer { --poster-color: transparent; }
+        @keyframes spin-slow { 100% { transform: rotate(360deg); } }
+        @keyframes pulse-glow { 0%, 100% { opacity: 0.6; } 50% { opacity: 1; } }
+        /* プレミアムエフェクト用アニメーション */
+        @keyframes magic-spin { 0% { transform: translateX(-50%) rotate(0deg); } 100% { transform: translateX(-50%) rotate(360deg); } }
+      `}} />
+
       <Script type="module" src="https://ajax.googleapis.com/ajax/libs/model-viewer/3.4.0/model-viewer.min.js" />
 
-      {/* 現実空間モードの背景（スマホの背面カメラ） */}
-      <video ref={videoRef} className="ns-camera" playsInline muted autoPlay aria-hidden="true" />
+      {/* プレミアム機能 ON/OFF スイッチ */}
+      <div style={{ position: 'absolute', top: '16px', left: '16px', zIndex: 10 }}>
+        <button 
+          onClick={() => setIsPremium(!isPremium)}
+          style={{
+            backgroundColor: isPremium ? 'rgba(251, 191, 36, 0.2)' : 'rgba(255, 255, 255, 0.1)',
+            border: isPremium ? '1px solid #f59e0b' : '1px solid rgba(255, 255, 255, 0.2)',
+            color: isPremium ? '#fbbf24' : '#9ca3af',
+            padding: '6px 12px', borderRadius: '20px', fontSize: '11px', fontWeight: 'bold', cursor: 'pointer'
+          }}>
+          {isPremium ? '👑 プレミアム機能ON' : '機能アンロック'}
+        </button>
+      </div>
 
-      {showQr && currentUrl && (
-        <div className="ns-qr">
-          <div style={{ fontSize: 13, color: '#93c5fd', fontWeight: 800, marginBottom: 8 }}>📱 スマホでXR体験！</div>
-          <p style={{ fontSize: 11, color: '#9ca3af', margin: '0 0 12px', lineHeight: 1.4 }}>
-            スマホで読み込むと、現実空間でアバターがニュースを読んでくれます。
+      {isDesktop && currentUrl && (
+        <div style={{
+          position: 'fixed', top: '24px', right: '24px', width: '220px',
+          backgroundColor: 'rgba(17, 24, 39, 0.9)', backdropFilter: 'blur(8px)',
+          padding: '16px', borderRadius: '16px', border: '1px solid rgba(59, 130, 246, 0.3)',
+          textAlign: 'center', boxShadow: '0 8px 32px rgba(0, 0, 0, 0.5)', zIndex: 50
+        }}>
+          <div style={{ fontSize: '13px', color: '#93c5fd', fontWeight: 800, marginBottom: '8px' }}>📱 スマホでXR体験！</div>
+          <p style={{ fontSize: '11px', color: '#9ca3af', marginBottom: '12px', lineHeight: 1.4 }}>
+            スマホのカメラでQRコードを読み込むと、現実空間にニュースを召喚できます。
           </p>
-          <div style={{ padding: 8, background: '#fff', borderRadius: 12, display: 'inline-block' }}>
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={`https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${encodeURIComponent(currentUrl)}`} alt="このページのQRコード" style={{ width: 150, height: 150, display: 'block' }} />
+          <div style={{ padding: '8px', backgroundColor: '#fff', borderRadius: '12px', display: 'inline-block' }}>
+            <img src={`https://api.qrserver.com/v1/create-qr-code/?size=150x150&data=${encodeURIComponent(currentUrl)}`} alt="QR Code" style={{ width: '150px', height: '150px', display: 'block' }} />
           </div>
         </div>
       )}
 
-      {/* ===== 上部：ニュース ===== */}
-      <section className="ns-top" aria-label="ニュース一覧">
-        <header className="ns-header">
-          <svg viewBox="0 0 300 52" style={{ width: 210, height: 'auto' }} role="img" aria-label="News Summoner">
+      <header style={{ marginBottom: '28px', textAlign: 'center', paddingTop: '20px' }}>
+        <div style={{
+          display: 'inline-flex', alignItems: 'center', gap: '8px', padding: '4px 12px',
+          borderRadius: '9999px', backgroundColor: 'rgba(59, 130, 246, 0.12)',
+          border: '1px solid rgba(59, 130, 246, 0.3)', color: '#60a5fa', fontSize: '11px',
+          fontWeight: 700, marginBottom: '16px', letterSpacing: '0.08em'
+        }}>
+          <span style={{ width: '6px', height: '6px', borderRadius: '50%', backgroundColor: '#3b82f6', boxShadow: '0 0 8px #3b82f6' }}></span>
+          News Summoner
+        </div>
+
+        <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '16px' }}>
+          <svg viewBox="0 0 340 80" style={{ width: '100%', maxWidth: '340px', height: 'auto' }}>
             <defs>
               <linearGradient id="textGrad" x1="0" y1="0" x2="1" y2="1">
-                <stop offset="0%" stopColor="#ffffff" />
-                <stop offset="50%" stopColor="#93c5fd" />
-                <stop offset="100%" stopColor="#c084fc" />
+                <stop offset="0%" stopColor="#ffffff"/>
+                <stop offset="50%" stopColor="#93c5fd"/>
+                <stop offset="100%" stopColor="#c084fc"/>
               </linearGradient>
+              <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+                <feGaussianBlur stdDeviation="3" result="blur" />
+                <feComposite in="SourceGraphic" in2="blur" operator="over" />
+              </filter>
             </defs>
-            <circle cx="26" cy="26" r="18" fill="none" stroke="url(#textGrad)" strokeWidth="1.5" strokeDasharray="4 5" />
-            <circle cx="26" cy="26" r="8" fill="url(#textGrad)" />
-            <text x="54" y="35" fontFamily="system-ui, sans-serif" fontSize="25" fontWeight="900" fill="url(#textGrad)">News Summoner</text>
+            <g style={{ transformOrigin: '40px 40px', animation: 'spin-slow 12s linear infinite' }}>
+              <circle cx="40" cy="40" r="28" fill="none" stroke="url(#textGrad)" strokeWidth="1.5" strokeDasharray="4 6" />
+              <polygon points="40,15 57,55 18,30 62,30 23,55" fill="none" stroke="#60a5fa" strokeWidth="1" opacity="0.5" />
+            </g>
+            <circle cx="40" cy="40" r="12" fill="url(#textGrad)" filter="url(#glow)" style={{ animation: 'pulse-glow 2s ease-in-out infinite' }} />
+            <text x="85" y="52" fontFamily="system-ui, sans-serif" fontSize="28" fontWeight="900" fill="url(#textGrad)" letterSpacing="1">
+              News Summoner
+            </text>
           </svg>
-          {newsData?.last_updated && <span className="ns-updated">更新 {formatUpdated(newsData.last_updated)}</span>}
-        </header>
-
-        {loadError ? (
-          <div className="ns-state">
-            ニュースを読み込めませんでした。
-            <div style={{ marginTop: 12 }}>
-              <button className="ns-chip" onClick={fetchNews}>🔄 再読み込み</button>
-            </div>
-          </div>
-        ) : !newsData ? (
-          <div className="ns-state">最新のニュースを読み込んでいます...</div>
-        ) : (
-          <>
-            <div className="ns-tabs" role="tablist">
-              {categories.map(key => {
-                const meta = categoryMeta[key] || { label: key, icon: '📰' };
-                return (
-                  <button key={key} role="tab" aria-selected={activeCategory === key} className="ns-tab"
-                    onClick={() => setActiveCategory(key)}>
-                    <span>{meta.icon}</span><span>{meta.label}</span>
-                  </button>
-                );
-              })}
-            </div>
-
-            <div className="ns-list" role="list">
-              {items.map(item => {
-                const key = itemKey(activeCategory, item);
-                const speaking = speakingKey === key;
-                return (
-                  <div key={key} role="listitem" className={`ns-item${speaking ? ' is-speaking' : ''}`}>
-                    <button className="ns-item-main" onClick={() => readNews(activeCategory, item)}
-                      aria-label={speaking ? `読み上げを停止：${item.title}` : `読み上げる：${item.title}`}>
-                      <span className="ns-speak-icon" aria-hidden="true">
-                        {speaking ? <span className="ns-bars"><i /><i /><i /></span> : '🔈'}
-                      </span>
-                      <span className="ns-title">{item.title}</span>
-                    </button>
-                    <a className="ns-link" href={item.url} target="_blank" rel="noreferrer">🔗 記事</a>
-                  </div>
-                );
-              })}
-            </div>
-          </>
-        )}
-      </section>
-
-      {/* ===== 下部：XRアバター ===== */}
-      <section className="ns-stage" aria-label="XRアバター">
-        <div className="ns-bubble-wrap">
-          {renderBubble()}
-          <div className="ns-bubble-tail" aria-hidden="true" />
         </div>
+      </header>
 
-        <div className="ns-viewer-wrap">
-          <model-viewer
-            ref={viewerRef}
-            src={AVATAR_SRC}
-            alt="ニュースを読み上げるロボットのアバター"
-            ar=""
-            ar-modes="webxr scene-viewer quick-look"
-            ar-placement="floor"
-            camera-controls=""
-            disable-zoom=""
-            disable-pan=""
-            touch-action="pan-y"
-            interaction-prompt="none"
-            camera-orbit={reality ? '0deg 78deg 22m' : '0deg 80deg 14m'}
-            camera-target={reality ? '0m 3.6m 0m' : '0m 2.3m 0m'}
-            field-of-view="30deg"
-            shadow-intensity="1"
-            exposure="1.1"
-            autoplay=""
-            animation-name={animation}
-            animation-crossfade-duration="300"
-            onClick={greet}
-          >
-            <button slot="ar-button" className="ns-chip ns-ar ns-ar-btn">🕶 床に置くAR</button>
-
-            {/* 現実空間モード・AR中に表示するパネル（model-viewer の中に置くと WebXR の AR 中も表示される） */}
-            <div className={`ns-overlay${overlayShown ? ' is-shown' : ''}`} onClick={e => e.stopPropagation()}>
-              <div>
-                {renderBubble()}
-                {reality && cameraState === 'error' && (
-                  <div className="ns-overlay-note">カメラを使えないため、背景なしで表示しています</div>
-                )}
-                {reality && cameraState === 'starting' && <div className="ns-overlay-note">カメラを起動しています…</div>}
-              </div>
-              <div className="ns-remote" role="toolbar" aria-label="ニュースの操作">
-                <button onClick={() => playStep(-1)} aria-label="前のニュース" disabled={!newsData}>⏮</button>
-                <button className="is-main" onClick={toggleAutoPlay} aria-label={autoPlay ? '連続再生を止める' : 'ニュースを連続で読む'} disabled={!newsData}>
-                  {autoPlay ? '⏸' : '▶'}
+      {!newsData ? (
+        <div style={{ textAlign: 'center', color: '#9ca3af', padding: '40px' }}>最新のニュースを読み込んでいます...</div>
+      ) : (
+        <>
+          <div style={{ display: 'flex', gap: '6px', marginBottom: '20px', padding: '4px', backgroundColor: '#111827', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.08)', overflowX: 'auto' }}>
+            {categories.map((key) => {
+              const isActive = activeCategory === key;
+              const meta = categoryMeta[key] || { label: key, icon: '📰' };
+              return (
+                <button key={key} onClick={() => { setActiveCategory(key); setSelectedNews(newsData[key][0]); }}
+                  style={{
+                    flex: 1, padding: '10px', borderRadius: '8px', border: 'none',
+                    background: isActive ? 'linear-gradient(135deg, #2563eb, #1d4ed8)' : 'transparent',
+                    color: isActive ? '#ffffff' : '#9ca3af', fontWeight: isActive ? 700 : 500,
+                    fontSize: '13px', cursor: 'pointer', transition: 'all 0.2s ease', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', whiteSpace: 'nowrap'
+                  }}>
+                  <span>{meta.icon}</span><span style={{ textTransform: 'uppercase' }}>{meta.label}</span>
                 </button>
-                <button onClick={() => playStep(1)} aria-label="次のニュース" disabled={!newsData}>⏭</button>
-                <button onClick={openAsk} aria-label="質問する">💬</button>
-                <button onClick={toggleMute} aria-label={muted ? '音声をオンにする' : '音声をオフにする'}>{muted ? '🔇' : '🔊'}</button>
-                {reality && !arActive && <button className="ns-remote-exit" onClick={() => { stopAll(); exitReality(); }}>終了</button>}
-              </div>
-            </div>
-            {arActive && askSheet}
-          </model-viewer>
+              );
+            })}
+          </div>
 
-          <div className="ns-controls">
-            <button className="ns-chip" onClick={toggleMute} aria-pressed={muted} aria-label={muted ? '音声をオンにする' : '音声をオフにする'}>
-              {muted ? '🔇' : '🔊'}
-            </button>
-            {isTalking || autoPlay ? (
-              <button className="ns-chip" onClick={stopAll}>⏹ 停止</button>
-            ) : (
-              <button className="ns-chip" onClick={toggleAutoPlay} disabled={!newsData}>▶ 連続再生</button>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '10px', marginBottom: '32px' }}>
+            {newsData[activeCategory]?.map((item: any, idx: number) => {
+              const isSelected = selectedNews?.url === item.url && selectedNews?.title === item.title;
+              const meta = categoryMeta[activeCategory] || { label: activeCategory };
+              
+              return (
+                <div key={idx} style={{ padding: '14px 16px', borderRadius: '12px', backgroundColor: isSelected ? 'rgba(30, 41, 59, 0.9)' : '#111827', border: isSelected ? '1px solid #3b82f6' : '1px solid rgba(255, 255, 255, 0.05)', transition: 'all 0.2s ease', boxShadow: isSelected ? '0 0 16px rgba(59, 130, 246, 0.25)' : 'none', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px' }}>
+                  <div onClick={() => setSelectedNews(item)} style={{ flex: 1, cursor: 'pointer' }}>
+                    <span style={{ fontSize: '10px', padding: '2px 6px', borderRadius: '4px', backgroundColor: isSelected ? 'rgba(59, 130, 246, 0.25)' : 'rgba(255, 255, 255, 0.06)', color: isSelected ? '#93c5fd' : '#6b7280', fontWeight: 600, display: 'inline-block', marginBottom: '4px', textTransform: 'uppercase' }}>{meta.label}</span>
+                    <div style={{ fontSize: '14px', fontWeight: 600, color: isSelected ? '#ffffff' : '#d1d5db', lineHeight: 1.4 }}>{item.title}</div>
+                  </div>
+                  
+                  <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '8px' }}>
+                    <a href={item.url} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()} style={{ fontSize: '11px', color: '#93c5fd', textDecoration: 'none', padding: '4px 8px', backgroundColor: 'rgba(59, 130, 246, 0.1)', border: '1px solid rgba(59, 130, 246, 0.3)', borderRadius: '6px', fontWeight: 600, whiteSpace: 'nowrap' }}>🔗 記事を読む</a>
+                    <div onClick={() => setSelectedNews(item)} style={{ fontSize: '11px', color: isSelected ? '#60a5fa' : '#4b5563', fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px' }}><span>XR対象</span><span>{isSelected ? '●' : '○'}</span></div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </>
+      )}
+
+      {assetUrl && (
+        <div style={{ marginBottom: '20px', padding: '16px', backgroundColor: '#111827', borderRadius: '16px', border: '1px solid rgba(59, 130, 246, 0.3)', textAlign: 'center', position: 'relative', overflow: 'hidden' }}>
+          <h3 style={{ fontSize: '13px', color: '#93c5fd', margin: '0 0 12px 0', position: 'relative', zIndex: 2 }}>生成完了</h3>
+          
+          {assetType === '2.5d' ? (
+            <img src={assetUrl} alt="2.5D Asset" style={{ maxWidth: '100%', maxHeight: '250px', borderRadius: '8px', position: 'relative', zIndex: 2 }} />
+          ) : (
+            <div style={{ position: 'relative', width: '100%', height: '250px' }}>
+              {/* プレミアムエフェクト描画（ONの時だけ表示） */}
+              {isPremium && (
+                <div style={{
+                  position: 'absolute', bottom: '-40px', left: '50%', width: '200px', height: '200px',
+                  borderRadius: '50%', border: '2px dashed rgba(251, 191, 36, 0.8)',
+                  boxShadow: '0 0 30px rgba(251, 191, 36, 0.5), inset 0 0 30px rgba(251, 191, 36, 0.5)',
+                  animation: 'magic-spin 15s linear infinite', zIndex: 1, pointerEvents: 'none'
+                }}>
+                  <div style={{ position: 'absolute', top: '10px', left: '10px', right: '10px', bottom: '10px', border: '1px solid rgba(251, 191, 36, 0.5)', borderRadius: '50%' }} />
+                </div>
+              )}
+              {/* @ts-ignore */}
+              <model-viewer src={assetUrl} ar ar-modes="webxr scene-viewer quick-look" auto-rotate camera-controls style={{ width: '100%', height: '100%', outline: 'none', backgroundColor: 'transparent', position: 'relative', zIndex: 2 }} />
+            </div>
+          )}
+          {isDesktop && assetType === '3d' && (
+            <p style={{ fontSize: '11px', color: '#fbbf24', marginTop: '12px', lineHeight: 1.4, position: 'relative', zIndex: 2 }}>
+              ⚠️ PCでは3Dプレビューのみ可能です。<br/>空間への配置（XR体験）は右上のQRコードからスマホでアクセスしてください。
+            </p>
+          )}
+        </div>
+      )}
+
+      <div style={{
+        position: 'fixed', bottom: '16px', left: '50%', transform: 'translateX(-50%)',
+        width: 'calc(100% - 32px)', maxWidth: '680px', backgroundColor: 'rgba(17, 24, 39, 0.92)',
+        backdropFilter: 'blur(16px)', WebkitBackdropFilter: 'blur(16px)',
+        border: '1px solid rgba(147, 197, 253, 0.25)', borderRadius: '16px',
+        padding: '14px 16px', boxShadow: '0 16px 36px rgba(0, 0, 0, 0.7), 0 0 24px rgba(59, 130, 246, 0.2)',
+        boxSizing: 'border-box', zIndex: 100
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px', flexWrap: 'wrap', gap: '8px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '6px', maxWidth: '50%' }}>
+            <span style={{ fontSize: '16px' }}>🔮</span>
+            <span style={{ fontSize: '14px', fontWeight: 700, color: '#f3f4f6', whiteSpace: 'nowrap' }}>XRアセット生成</span>
+            {selectedNews && (
+              <span style={{ fontSize: '11px', color: '#c084fc', backgroundColor: 'rgba(192, 132, 252, 0.15)', padding: '2px 6px', borderRadius: '4px', fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {selectedNews.title}
+              </span>
             )}
-            <button className="ns-chip" onClick={openAsk}>💬 質問</button>
-            <button className="ns-chip ns-chip-primary" onClick={enterReality}>📷 現実空間で聞く</button>
+          </div>
+          <div style={{ display: 'flex', backgroundColor: '#030712', padding: '2px', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.1)' }}>
+            <button onClick={() => setAssetType('2.5d')} style={{ padding: '5px 10px', borderRadius: '6px', border: 'none', backgroundColor: assetType === '2.5d' ? '#374151' : 'transparent', color: assetType === '2.5d' ? '#ffffff' : '#9ca3af', fontSize: '11px', fontWeight: 600, cursor: 'pointer' }}>2.5D (高速画像)</button>
+            <button onClick={() => setAssetType('3d')} style={{ padding: '5px 10px', borderRadius: '6px', border: 'none', backgroundColor: assetType === '3d' ? '#2563eb' : 'transparent', color: assetType === '3d' ? '#ffffff' : '#9ca3af', fontSize: '11px', fontWeight: 600, cursor: 'pointer' }}>3D (GLB)</button>
           </div>
         </div>
-      </section>
-
-      {!arActive && askSheet}
+        <button
+          onClick={handleSummon} disabled={isSummoning || !selectedNews}
+          style={{
+            width: '100%', padding: '12px', borderRadius: '10px', border: 'none',
+            background: isSummoning ? '#374151' : (isPremium ? 'linear-gradient(135deg, #f59e0b 0%, #d97706 100%)' : 'linear-gradient(135deg, #a855f7 0%, #3b82f6 50%, #06b6d4 100%)'),
+            color: '#ffffff', fontSize: '14px', fontWeight: 700, cursor: isSummoning || !selectedNews ? 'not-allowed' : 'pointer',
+            boxShadow: isPremium ? '0 4px 16px rgba(245, 158, 11, 0.35)' : '0 4px 16px rgba(168, 85, 247, 0.35)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px', position: 'relative', overflow: 'hidden'
+          }}
+        >
+          {isSummoning && assetType === '3d' && (
+            <div style={{ position: 'absolute', top: 0, left: 0, height: '100%', backgroundColor: 'rgba(255, 255, 255, 0.2)', width: `${progress}%`, transition: 'width 0.5s' }} />
+          )}
+          <span style={{ position: 'relative', zIndex: 10 }}>{isSummoning ? (assetType === '3d' ? `⏳ AIが3Dモデリング中... ${progress}%` : '⏳ AIが画像を生成中...') : '✨ 空間に召喚する'}</span>
+        </button>
+      </div>
     </div>
   );
 }

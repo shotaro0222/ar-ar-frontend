@@ -21,8 +21,6 @@ export default function HomePage() {
   const [assetUrl, setAssetUrl] = useState<string | null>(null);
   const [isDesktop, setIsDesktop] = useState(false);
   const [currentUrl, setCurrentUrl] = useState('');
-
-  // 実装3: プレミアムユーザー判定（テスト用トグル）
   const [isPremium, setIsPremium] = useState(false);
 
   useEffect(() => {
@@ -110,17 +108,16 @@ export default function HomePage() {
     <div style={{
       minHeight: '100vh', backgroundColor: '#0b0f19', color: '#f3f4f6',
       fontFamily: 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
-      padding: '24px 16px 200px 16px', maxWidth: '720px', margin: '0 auto',
+      padding: '24px 16px 220px 16px', maxWidth: '720px', margin: '0 auto',
       boxSizing: 'border-box', position: 'relative'
     }}>
       
       <style dangerouslySetInnerHTML={{__html: `
         html, body { margin: 0; padding: 0; background-color: #0b0f19; overflow-x: hidden; }
         model-viewer:focus { outline: none; }
-        model-viewer { --poster-color: transparent; }
+        model-viewer { --poster-color: transparent; width: 100%; height: 350px; background-color: transparent; }
         @keyframes spin-slow { 100% { transform: rotate(360deg); } }
         @keyframes pulse-glow { 0%, 100% { opacity: 0.6; } 50% { opacity: 1; } }
-        /* プレミアムエフェクト用アニメーション */
         @keyframes magic-spin { 0% { transform: translateX(-50%) rotate(0deg); } 100% { transform: translateX(-50%) rotate(360deg); } }
       `}} />
 
@@ -193,6 +190,48 @@ export default function HomePage() {
         </div>
       </header>
 
+      {/* 生成結果・アバター表示エリア（常にここに3D/2.5Dが表示されます） */}
+      {assetUrl && (
+        <div style={{
+          marginBottom: '24px', padding: '16px', backgroundColor: '#111827',
+          borderRadius: '16px', border: '1px solid rgba(59, 130, 246, 0.3)', textAlign: 'center', position: 'relative', overflow: 'hidden'
+        }}>
+          <h3 style={{ fontSize: '13px', color: '#93c5fd', margin: '0 0 12px 0', position: 'relative', zIndex: 2 }}>生成完了 - 空間召喚準備OK</h3>
+          
+          {assetType === '2.5d' ? (
+            <img src={assetUrl} alt="2.5D Asset" style={{ maxWidth: '100%', maxHeight: '350px', borderRadius: '8px', position: 'relative', zIndex: 2, display: 'block', margin: '0 auto' }} />
+          ) : (
+            <div style={{ position: 'relative', width: '100%', height: '350px' }}>
+              {isPremium && (
+                <div style={{
+                  position: 'absolute', bottom: '10px', left: '50%', width: '220px', height: '220px',
+                  borderRadius: '50%', border: '2px dashed rgba(251, 191, 36, 0.8)',
+                  boxShadow: '0 0 30px rgba(251, 191, 36, 0.5), inset 0 0 30px rgba(251, 191, 36, 0.5)',
+                  animation: 'magic-spin 15s linear infinite', zIndex: 1, pointerEvents: 'none', transform: 'translateX(-50%)'
+                }}>
+                  <div style={{ position: 'absolute', top: '10px', left: '10px', right: '10px', bottom: '10px', border: '1px solid rgba(251, 191, 36, 0.5)', borderRadius: '50%' }} />
+                </div>
+              )}
+              {/* @ts-ignore */}
+              <model-viewer 
+                src={assetUrl} 
+                ar 
+                ar-modes="webxr scene-viewer quick-look" 
+                auto-rotate 
+                camera-controls 
+                style={{ width: '100%', height: '100%', outline: 'none', backgroundColor: 'transparent', position: 'relative', zIndex: 2 }} 
+              />
+            </div>
+          )}
+
+          {isDesktop && assetType === '3d' && (
+            <p style={{ fontSize: '11px', color: '#fbbf24', marginTop: '12px', lineHeight: 1.4, position: 'relative', zIndex: 2 }}>
+              ⚠️ PCでは3Dプレビューのみ可能です。<br/>空間への配置（XR体験）は右上のQRコードからスマホでアクセスしてください。
+            </p>
+          )}
+        </div>
+      )}
+
       {!newsData ? (
         <div style={{ textAlign: 'center', color: '#9ca3af', padding: '40px' }}>最新のニュースを読み込んでいます...</div>
       ) : (
@@ -238,37 +277,7 @@ export default function HomePage() {
         </>
       )}
 
-      {assetUrl && (
-        <div style={{ marginBottom: '20px', padding: '16px', backgroundColor: '#111827', borderRadius: '16px', border: '1px solid rgba(59, 130, 246, 0.3)', textAlign: 'center', position: 'relative', overflow: 'hidden' }}>
-          <h3 style={{ fontSize: '13px', color: '#93c5fd', margin: '0 0 12px 0', position: 'relative', zIndex: 2 }}>生成完了</h3>
-          
-          {assetType === '2.5d' ? (
-            <img src={assetUrl} alt="2.5D Asset" style={{ maxWidth: '100%', maxHeight: '250px', borderRadius: '8px', position: 'relative', zIndex: 2 }} />
-          ) : (
-            <div style={{ position: 'relative', width: '100%', height: '250px' }}>
-              {/* プレミアムエフェクト描画（ONの時だけ表示） */}
-              {isPremium && (
-                <div style={{
-                  position: 'absolute', bottom: '-40px', left: '50%', width: '200px', height: '200px',
-                  borderRadius: '50%', border: '2px dashed rgba(251, 191, 36, 0.8)',
-                  boxShadow: '0 0 30px rgba(251, 191, 36, 0.5), inset 0 0 30px rgba(251, 191, 36, 0.5)',
-                  animation: 'magic-spin 15s linear infinite', zIndex: 1, pointerEvents: 'none'
-                }}>
-                  <div style={{ position: 'absolute', top: '10px', left: '10px', right: '10px', bottom: '10px', border: '1px solid rgba(251, 191, 36, 0.5)', borderRadius: '50%' }} />
-                </div>
-              )}
-              {/* @ts-ignore */}
-              <model-viewer src={assetUrl} ar ar-modes="webxr scene-viewer quick-look" auto-rotate camera-controls style={{ width: '100%', height: '100%', outline: 'none', backgroundColor: 'transparent', position: 'relative', zIndex: 2 }} />
-            </div>
-          )}
-          {isDesktop && assetType === '3d' && (
-            <p style={{ fontSize: '11px', color: '#fbbf24', marginTop: '12px', lineHeight: 1.4, position: 'relative', zIndex: 2 }}>
-              ⚠️ PCでは3Dプレビューのみ可能です。<br/>空間への配置（XR体験）は右上のQRコードからスマホでアクセスしてください。
-            </p>
-          )}
-        </div>
-      )}
-
+      {/* XR生成パネル（固定フッター） */}
       <div style={{
         position: 'fixed', bottom: '16px', left: '50%', transform: 'translateX(-50%)',
         width: 'calc(100% - 32px)', maxWidth: '680px', backgroundColor: 'rgba(17, 24, 39, 0.92)',

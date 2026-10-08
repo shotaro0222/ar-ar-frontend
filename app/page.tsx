@@ -9,18 +9,24 @@ const API_BASE = 'https://xr-reference.kyouhitotsu-dev.workers.dev';
 // アバター（RobotExpressive / CC0）。public/models に同梱して外部依存をなくしている
 const AVATAR_SRC = '/models/RobotExpressive.glb';
 
-const categoryMeta: Record<string, { label: string; icon: string }> = {
-  it: { label: 'IT', icon: '⚡' },
-  business: { label: 'ビジネス', icon: '📈' },
-  entertainment: { label: 'エンタメ', icon: '🎬' },
-  funny: { label: 'オモシロ', icon: '🎭' }
+const categoryMeta: Record<string, { label: string; icon: string; meaning: string }> = {
+  it: { label: 'IT', icon: '⚡', meaning: 'コンピューターやインターネット、アプリなどの情報技術に関するニュースです。' },
+  business: { label: 'ビジネス', icon: '📈', meaning: '会社の活動や新しい商品、働き方など、仕事や企業に関するニュースです。' },
+  entertainment: { label: 'エンタメ', icon: '🎬', meaning: '映画や音楽、テレビ、芸能など、楽しみや文化に関するニュースです。' },
+  funny: { label: 'オモシロ', icon: '🎭', meaning: '思わず笑ったり驚いたりする、ユニークで楽しい話題のニュースです。' },
+  politics: { label: '政治', icon: '🏛️', meaning: '国や地域のルール、政策、選挙など、政治の動きに関するニュースです。' },
+  society: { label: '社会', icon: '🏙️', meaning: '事件や事故、地域の出来事、社会が抱える課題などに関するニュースです。' },
+  world: { label: '国際', icon: '🌏', meaning: '日本以外の国や地域で起きた出来事、国どうしの関係に関するニュースです。' },
+  sports: { label: 'スポーツ', icon: '⚽', meaning: '試合の結果や選手の活躍、大会など、スポーツに関するニュースです。' },
+  science: { label: '科学', icon: '🔬', meaning: '自然のしくみを調べる研究や、新しい発見・技術に関するニュースです。' },
+  lifestyle: { label: '暮らし', icon: '🏠', meaning: '健康や食事、住まいなど、毎日の生活に役立つ話題のニュースです。' }
 };
 
 type NewsItem = { title: string; url: string; summary?: string; summaryKind?: 'ai' | 'rss'; source?: string };
 type NewsData = Record<string, NewsItem[] | string> & { last_updated?: string };
 type Current = { cat: string; item: NewsItem };
 type Bubble = {
-  kind: 'hint' | 'news' | 'answer';
+  kind: 'hint' | 'news' | 'answer' | 'category';
   label?: string;
   title: string;
   sentences?: string[];
@@ -271,6 +277,27 @@ export default function HomePage() {
   }, [stopAll, endTalkUI, playStep]);
   readNewsRef.current = readNews;
 
+  const explainCategory = (cat: string) => {
+    const meta = categoryMeta[cat];
+    const label = meta?.label || cat;
+    const meaning = meta?.meaning || `${label}に関するニュースを集めたカテゴリです。`;
+    const sentence = `「${label}」は、${meaning}`;
+    stopAll();
+    setBubble({ kind: 'category', label, title: `${label}ってどんなカテゴリ？`, sentences: [sentence] });
+    setActiveSeg(-1);
+    setSpeakingKey(`category::${cat}`);
+    setAnimation(ANIM.talk);
+
+    const talk = startTalk(talkRef.current, {
+      muted: mutedRef.current,
+      voice: voiceRef.current,
+      onSeg: setActiveSeg,
+      onDone: endTalkUI
+    });
+    talk.enqueue(sentence, 0);
+    talk.ready(sentence.length);
+  };
+
   const toggleAutoPlay = () => {
     if (autoRef.current) { stopAll(); return; }
     autoRef.current = true;
@@ -389,7 +416,7 @@ export default function HomePage() {
       ) : (
         <>
           <span className="ns-bubble-label">
-            {bubble.kind === 'answer' ? '💬 質問への答え' : `${bubble.label}のニュース`}
+            {bubble.kind === 'answer' ? '💬 質問への答え' : bubble.kind === 'category' ? '🗂 カテゴリの説明' : `${bubble.label}のニュース`}
             {isTalking && <span className="ns-bars" aria-hidden="true"><i /><i /><i /></span>}
           </span>
           {bubble.kind === 'answer' ? (
@@ -412,7 +439,7 @@ export default function HomePage() {
             <p className="ns-bubble-summary">このニュースの中身を取得できませんでした。詳しくは「🔗 記事」からご覧ください。</p>
           )}
           {bubble.kind === 'news' && bubble.source && <div className="ns-bubble-source">出典：{bubble.source}</div>}
-          {!bubble.loading && (
+          {!bubble.loading && bubble.kind !== 'category' && (
             <button className="ns-ask-link" onClick={openAsk}>
               💬 {bubble.kind === 'answer' ? 'ほかにも質問する' : 'わからない言葉を質問する'}
             </button>
@@ -501,6 +528,14 @@ export default function HomePage() {
                 );
               })}
             </div>
+            {activeCategory && (
+              <div className="ns-category-info">
+                <span>{categoryMeta[activeCategory]?.meaning || `${categoryMeta[activeCategory]?.label || activeCategory}に関するニュースです。`}</span>
+                <button className="ns-category-explain" onClick={() => explainCategory(activeCategory)}>
+                  🤖 意味を聞く
+                </button>
+              </div>
+            )}
 
             <div className="ns-list" role="list">
               {items.map(item => {

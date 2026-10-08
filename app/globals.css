@@ -15,6 +15,11 @@ html, body { margin: 0; padding: 0; background-color: #0b0f19; overflow: hidden;
   font-size: 13px; font-weight: 500; cursor: pointer; display: flex; align-items: center; justify-content: center;
   gap: 6px; white-space: nowrap; transition: all .2s ease; }
 .ns-tab[aria-selected="true"] { background: linear-gradient(135deg, #2563eb, #1d4ed8); color: #fff; font-weight: 700; }
+.ns-category-info { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: -2px 0 8px;
+  flex-shrink: 0; color: #9ca3af; font-size: 11px; line-height: 1.4; }
+.ns-category-info > span { min-width: 0; }
+.ns-category-explain { flex-shrink: 0; padding: 5px 9px; border: 1px solid rgba(147,197,253,0.3); border-radius: 9999px;
+  background: rgba(17,24,39,0.85); color: #bfdbfe; font-size: 11px; font-weight: 600; cursor: pointer; white-space: nowrap; }
 .ns-list { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 8px;
   padding-bottom: 12px; overscroll-behavior: contain; }
 .ns-item { display: flex; align-items: stretch; gap: 10px; padding: 0; border-radius: 12px; background: #111827;

@@ -3,13 +3,16 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import Script from 'next/script';
 import AskSheet, { ChatTurn } from './components/AskSheet';
+import EffectLayer, { EFFECTS, EffectKind, MAGIC_COLORS } from './components/EffectLayer';
+import PremiumSheet from './components/PremiumSheet';
 import { pickJapaneseVoice, splitSentences, startTalk, stopTalk, TalkHolder } from './lib/speech';
-
-const API_BASE = 'https://xr-reference.kyouhitotsu-dev.workers.dev';
+import { API_BASE, checkPremium, claimStripe, EMPTY_CONFIG, fetchConfig, Placement, PremiumState, PublicConfig, sponsorFor, track } from './lib/api';
+import { capturePhoto } from './lib/photo';
 // アバター（RobotExpressive / CC0）。public/models に同梱して外部依存をなくしている
 const AVATAR_SRC = '/models/RobotExpressive.glb';
 
 const categoryMeta: Record<string, { label: string; icon: string; meaning: string }> = {
+  local: { label: 'ローカル', icon: '📍', meaning: '自治体や観光協会が紹介する、地域の見どころや特産品の情報です。3Dで目の前に呼び出せます。' },
   it: { label: 'IT', icon: '⚡', meaning: 'コンピューターやインターネット、アプリなどの情報技術に関するニュースです。' },
   business: { label: 'ビジネス', icon: '📈', meaning: '会社の活動や新しい商品、働き方など、仕事や企業に関するニュースです。' },
   entertainment: { label: 'エンタメ', icon: '🎬', meaning: '映画や音楽、テレビ、芸能など、楽しみや文化に関するニュースです。' },
@@ -22,21 +25,22 @@ const categoryMeta: Record<string, { label: string; icon: string; meaning: strin
   lifestyle: { label: '暮らし', icon: '🏠', meaning: '健康や食事、住まいなど、毎日の生活に役立つ話題のニュースです。' }
 };
 
-type NewsItem = { title: string; url: string; summary?: string; summaryKind?: 'ai' | 'rss'; source?: string };
+type NewsItem = { title: string; url: string; summary?: string; summaryKind?: 'ai' | 'rss'; source?: string; placementId?: string };
 type NewsData = Record<string, NewsItem[] | string> & { last_updated?: string };
 type Current = { cat: string; item: NewsItem };
 type Bubble = {
-  kind: 'hint' | 'news' | 'answer' | 'category';
+  kind: 'hint' | 'news' | 'answer' | 'category' | 'placement';
   label?: string;
   title: string;
   sentences?: string[];
   source?: string;
   loading?: boolean;
+  placement?: Placement; // kind: 'placement'（スポンサー／ローカルの3D）
 };
 
 const HINT_BUBBLE: Bubble = {
   kind: 'hint',
-  title: 'こんにちは！ニュースのタイトルをタップすると、記事の中身をボクが読み上げるよ。わからない言葉は「💬 質問」で聞いてね🎙️'
+  title: 'こんにちは！ニュースのタイトルをタップすると、記事の中身をボクが読み上げるよ。「💬 話す」でボクとおしゃべりもできるよ🎙️'
 };
 
 // アバターのアニメーション名（RobotExpressive.glb に含まれるもの）
@@ -80,6 +84,25 @@ export default function HomePage() {
   const [asking, setAsking] = useState(false);
   const [termsByUrl, setTermsByUrl] = useState<Record<string, string[]>>({});
   const [termsLoading, setTermsLoading] = useState(false);
+  const [answerTick, setAnswerTick] = useState(0); // 答えを読み終えるたびに増える（ハンズフリー会話用）
+
+  // マネタイズ：掲載枠（スポンサー／ローカル3D）・エフェクト・AR写真・プレミアム
+  const [rawNews, setRawNews] = useState<NewsData | null>(null);
+  const [config, setConfig] = useState<PublicConfig>(EMPTY_CONFIG);
+  const [premium, setPremium] = useState<PremiumState>({ active: false });
+  const [premiumOpen, setPremiumOpen] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [effectOpen, setEffectOpen] = useState(false);
+  const [summoned, setSummoned] = useState<Placement | null>(null);
+  const [effect, setEffect] = useState<EffectKind>('none');
+  const [effectColor, setEffectColor] = useState(MAGIC_COLORS[0]);
+  const [photoBusy, setPhotoBusy] = useState(false);
+  const [toast, setToast] = useState('');
+  const [localRegion, setLocalRegion] = useState('');
+  const effectRef = useRef<HTMLCanvasElement | null>(null);
+  const summonedRef = useRef<Placement | null>(null);
+  summonedRef.current = summoned;
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const talkRef = useRef<TalkHolder>({ session: null, timer: null, utterances: [] });
   const voiceRef = useRef<SpeechSynthesisVoice | null>(null);
@@ -114,14 +137,50 @@ export default function HomePage() {
           if (Array.isArray(v)) data[k] = v.filter(i => i?.summary);
         }
       }
-      setNewsData(data);
-      const first = categoriesOf(data)[0];
-      if (first) setActiveCategory(prev => (listOf(data, prev).length ? prev : first));
+      setRawNews(data);
     } catch (error) {
       console.error('ニュースの取得に失敗しました', error);
       setLoadError(true);
     }
   }, []);
+
+  // ニュース＋ローカル掲載枠（自治体・観光PR）を1つのデータにまとめる
+  useEffect(() => {
+    if (!rawNews) return;
+    const locals: NewsItem[] = config.placements
+      .filter(p => p.type === 'local' && (!localRegion || p.region === localRegion))
+      .map(p => ({ title: p.title, url: p.linkUrl || '', summary: p.description, summaryKind: 'ai', source: p.sponsor, placementId: p.id }));
+    const data: NewsData = locals.length ? { local: locals, ...rawNews } : { ...rawNews };
+    setNewsData(data);
+    const first = categoriesOf(data)[0];
+    if (first) setActiveCategory(prev => (localRegion && locals.length ? 'local' : listOf(data, prev).length ? prev : first));
+  }, [rawNews, config, localRegion]);
+
+  const showToast = useCallback((m: string) => {
+    setToast(m);
+    if (toastTimer.current) clearTimeout(toastTimer.current);
+    toastTimer.current = setTimeout(() => setToast(''), 3500);
+  }, []);
+
+  // 掲載枠の設定とプレミアム状態を読み込む（Stripe の支払い後は ?premium_session=… で戻ってくる）
+  useEffect(() => {
+    fetchConfig().then(setConfig);
+    const params = new URLSearchParams(window.location.search);
+    // 観光地・自治体のQRコード用：?local=地域名 でその地域のローカル情報を最初に表示
+    if (params.get('local')) setLocalRegion(params.get('local')!.slice(0, 40));
+    const session = params.get('premium_session');
+    if (session) {
+      claimStripe(session).then(r => {
+        setPremium(r);
+        showToast(r.active ? '⭐ プレミアムが有効になりました！' : r.error || '支払いを確認できませんでした');
+      });
+      params.delete('premium_session');
+      const q = params.toString();
+      window.history.replaceState(null, '', window.location.pathname + (q ? `?${q}` : ''));
+    } else {
+      checkPremium().then(setPremium);
+    }
+  }, [showToast]);
 
   useEffect(() => {
     setCurrentUrl(window.location.href);
@@ -226,6 +285,7 @@ export default function HomePage() {
     const label = categoryMeta[cat]?.label || cat;
     const hasAiSummary = item.summaryKind === 'ai' && !!item.summary;
     setCurrent({ cat, item });
+    setSummoned(null); // 3Dを表示中ならアバターに戻して読む
     if (chatForRef.current !== item.url) { chatForRef.current = item.url; setChat([]); }
     setBubble({ kind: 'news', label, title: item.title, sentences: hasAiSummary ? splitSentences(item.summary!) : [], source: item.source, loading: !hasAiSummary });
     setActiveSeg(-1);
@@ -309,7 +369,7 @@ export default function HomePage() {
   };
 
   const greet = () => {
-    if (speakingKeyRef.current || asking) return;
+    if (speakingKeyRef.current || asking || summonedRef.current) return;
     setBubble(HINT_BUBBLE);
     setAnimation(ANIM.wave);
     if (waveTimer.current) clearTimeout(waveTimer.current);
@@ -352,7 +412,7 @@ export default function HomePage() {
       const res = await fetch(`${API_BASE}/api/ask`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ question, url: cur?.item.url, history }),
+        body: JSON.stringify({ question, url: summonedRef.current ? undefined : cur?.item.url, placement: summonedRef.current?.id, history }),
         signal: ctrl.signal
       });
       clearTimeout(t);
@@ -369,9 +429,96 @@ export default function HomePage() {
     setSpeakingKey('answer');
     setActiveSeg(-1);
     setAnimation(ANIM.talk);
-    const talk = startTalk(talkRef.current, { muted: mutedRef.current, voice: voiceRef.current, onSeg: setActiveSeg, onDone: endTalkUI });
+    const talk = startTalk(talkRef.current, {
+      muted: mutedRef.current,
+      voice: voiceRef.current,
+      onSeg: setActiveSeg,
+      onDone: () => { endTalkUI(); setAnswerTick(n => n + 1); }
+    });
     sentences.forEach((s, i) => talk.enqueue(s, i));
     talk.ready(answer.length);
+  };
+
+  // ---------------- スポンサー／ローカルの3Dを呼び出す ----------------
+  const placementOf = useCallback((item: NewsItem): Placement | undefined => {
+    if (item.placementId) return config.placements.find(p => p.id === item.placementId);
+    return sponsorFor(config.placements, `${item.title} ${item.summary || ''}`);
+  }, [config]);
+
+  const summon = (p: Placement) => {
+    stopAll();
+    setSummoned(p);
+    track(p.type === 'sponsor' ? 'sponsor_open' : 'local_open', p.id, false);
+    const sentences = splitSentences(p.description);
+    setBubble({ kind: 'placement', label: p.type === 'sponsor' ? 'PR' : p.region || 'ローカル', title: p.title, sentences, source: p.sponsor, placement: p });
+    const intro = p.type === 'sponsor' ? `${p.sponsor}の提供で、${p.title}を呼び出しました。` : `${p.region ? p.region + 'の' : ''}${p.title}を呼び出しました。`;
+    setSpeakingKey(`placement::${p.id}`);
+    setActiveSeg(-1);
+    const talk = startTalk(talkRef.current, { muted: mutedRef.current, voice: voiceRef.current, onSeg: setActiveSeg, onDone: endTalkUI });
+    talk.enqueue(intro, -1);
+    sentences.forEach((t, i) => talk.enqueue(t, i));
+    talk.ready(intro.length + p.description.length);
+  };
+
+  const unsummon = () => {
+    stopAll();
+    setSummoned(null);
+    setBubble(HINT_BUBBLE);
+  };
+
+  // ---------------- エフェクト・AR写真 ----------------
+  const chooseEffect = (id: EffectKind, color?: string) => {
+    // 無料：なし／魔法陣（紫）。それ以外はプレミアム
+    const free = id === 'none' || (id === 'magic' && (color || effectColor) === MAGIC_COLORS[0]);
+    if (!free && !premium.active) { setPremiumOpen(true); return; }
+    setEffect(id);
+    if (color) setEffectColor(color);
+  };
+
+  const takePhoto = async () => {
+    const viewer = viewerRef.current;
+    if (!viewer?.toBlob || photoBusy) return;
+    setPhotoBusy(true);
+    try {
+      const p = summonedRef.current;
+      const caption = p ? `${p.title}${p.type === 'sponsor' ? `（PR・提供：${p.sponsor}）` : `（${p.sponsor}）`}` : currentRef.current?.item.title;
+      const blob = await capturePhoto({
+        viewer,
+        video: reality && cameraState === 'on' ? videoRef.current : null,
+        effect: effect !== 'none' ? effectRef.current : null,
+        watermark: !premium.active,
+        caption
+      });
+      track('photo', p?.id || 'avatar', false);
+      const file = new File([blob], `news-summoner-${Date.now()}.jpg`, { type: 'image/jpeg' });
+      const nav: any = navigator;
+      if (nav.canShare?.({ files: [file] })) {
+        await nav.share({ files: [file], title: 'News Summoner' }).catch(() => {});
+      } else {
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = file.name;
+        a.click();
+        setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+      }
+      showToast(premium.active ? '📸 写真を保存しました' : '📸 写真を保存しました（ロゴなし保存はプレミアム）');
+    } catch (e) {
+      console.error(e);
+      showToast('写真を作れませんでした');
+    } finally {
+      setPhotoBusy(false);
+    }
+  };
+
+  // 床に置くAR（WebXR / Scene Viewer / Quick Look）。普段は使わないので「⋯」メニューの中に置く
+  const openFloorAR = async () => {
+    setMenuOpen(false);
+    const mv = viewerRef.current;
+    if (mv?.canActivateAR) {
+      try { await mv.activateAR(); } catch { showToast('ARを起動できませんでした'); }
+    } else {
+      showToast('この端末・ブラウザでは床に置くARを使えません');
+    }
   };
 
   // ---------------- 現実空間モード ----------------
@@ -402,12 +549,21 @@ export default function HomePage() {
     setReality(false);
   };
 
+  // 掲載枠の表示回数（スポンサー・自治体へのレポート用。1回の閲覧で1度だけ記録）
+  useEffect(() => {
+    listOf(newsData, activeCategory).forEach(item => {
+      const p = placementOf(item);
+      if (p) track(p.type === 'sponsor' ? 'sponsor_impression' : 'local_impression', p.id);
+    });
+  }, [newsData, activeCategory, placementOf]);
+
   // ---------------- 表示 ----------------
   const categories = categoriesOf(newsData);
   const items = listOf(newsData, activeCategory);
   const isTalking = speakingKey !== null;
   const overlayShown = reality || arActive;
   const currentTerms = current ? termsByUrl[current.item.url] || [] : [];
+  const viewerSrc = summoned?.glbUrl || AVATAR_SRC;
 
   const renderBubble = () => (
     <div key={bubble.kind + bubble.title} className="ns-bubble" role="status" aria-live="polite">
@@ -416,7 +572,10 @@ export default function HomePage() {
       ) : (
         <>
           <span className="ns-bubble-label">
-            {bubble.kind === 'answer' ? '💬 質問への答え' : bubble.kind === 'category' ? '🗂 カテゴリの説明' : `${bubble.label}のニュース`}
+            {bubble.kind === 'answer' ? '💬 アバターの答え'
+              : bubble.kind === 'category' ? '🗂 カテゴリの説明'
+              : bubble.kind === 'placement' ? (bubble.placement?.type === 'sponsor' ? <><span className="ns-pr">PR</span> 提供：{bubble.placement?.sponsor}</> : `📍 ${bubble.placement?.region || bubble.placement?.sponsor}`)
+              : `${bubble.label}のニュース`}
             {isTalking && <span className="ns-bars" aria-hidden="true"><i /><i /><i /></span>}
           </span>
           {bubble.kind === 'answer' ? (
@@ -439,9 +598,15 @@ export default function HomePage() {
             <p className="ns-bubble-summary">このニュースの中身を取得できませんでした。詳しくは「🔗 記事」からご覧ください。</p>
           )}
           {bubble.kind === 'news' && bubble.source && <div className="ns-bubble-source">出典：{bubble.source}</div>}
+          {bubble.kind === 'placement' && bubble.placement?.linkUrl && (
+            <a className="ns-ask-link ns-sponsor-link" href={bubble.placement.linkUrl} target="_blank" rel="noreferrer sponsored"
+              onClick={() => track(bubble.placement!.type === 'sponsor' ? 'sponsor_link' : 'local_link', bubble.placement!.id, false)}>
+              🔗 {bubble.placement.linkLabel || '詳しく見る'}
+            </a>
+          )}
           {!bubble.loading && bubble.kind !== 'category' && (
             <button className="ns-ask-link" onClick={openAsk}>
-              💬 {bubble.kind === 'answer' ? 'ほかにも質問する' : 'わからない言葉を質問する'}
+              💬 {bubble.kind === 'answer' ? '続けて話す' : bubble.kind === 'placement' ? 'これについて聞く' : 'わからない言葉を聞く'}
             </button>
           )}
         </>
@@ -460,6 +625,7 @@ export default function HomePage() {
       busy={asking}
       onSend={ask}
       onBeforeListen={stopAll}
+      answerTick={answerTick}
     />
   );
 
@@ -503,7 +669,24 @@ export default function HomePage() {
             <circle cx="26" cy="26" r="8" fill="url(#textGrad)" />
             <text x="54" y="35" fontFamily="system-ui, sans-serif" fontSize="25" fontWeight="900" fill="url(#textGrad)">News Summoner</text>
           </svg>
-          {newsData?.last_updated && <span className="ns-updated">更新 {formatUpdated(newsData.last_updated)}</span>}
+          <div className="ns-head-right">
+            {newsData?.last_updated && <span className="ns-updated">更新 {formatUpdated(newsData.last_updated)}</span>}
+            <button className="ns-menu-btn" onClick={() => setMenuOpen(o => !o)} aria-label="メニュー" aria-expanded={menuOpen}>⋯</button>
+          </div>
+          {menuOpen && (
+            <div className="ns-menu" role="menu" onClick={e => e.stopPropagation()}>
+              {config.premium.enabled && (
+                <button role="menuitem" onClick={() => { setMenuOpen(false); setPremiumOpen(true); }}>
+                  ⭐ プレミアムパス{premium.active ? '（有効）' : ''}
+                </button>
+              )}
+              <button role="menuitem" onClick={openFloorAR}>🕶 床に置くAR（実験的）</button>
+              <a role="menuitem" href="/signage" target="_blank" rel="noreferrer">📺 サイネージ表示</a>
+              {config.contactUrl && (
+                <a role="menuitem" href={config.contactUrl} target="_blank" rel="noreferrer">🏢 3D掲載・導入のお問い合わせ</a>
+              )}
+            </div>
+          )}
         </header>
 
         {loadError ? (
@@ -550,7 +733,16 @@ export default function HomePage() {
                       </span>
                       <span className="ns-title">{item.title}</span>
                     </button>
-                    <a className="ns-link" href={item.url} target="_blank" rel="noreferrer">🔗 記事</a>
+                    {(() => {
+                      const p = placementOf(item);
+                      return p ? (
+                        <button className={`ns-3d-chip${p.type === 'sponsor' ? ' is-pr' : ''}`} onClick={() => summon(p)}
+                          aria-label={`${p.title}の3Dを呼び出す${p.type === 'sponsor' ? `（PR・提供：${p.sponsor}）` : ''}`}>
+                          🎁 3D{p.type === 'sponsor' && <small>PR</small>}
+                        </button>
+                      ) : null;
+                    })()}
+                    {item.url && <a className="ns-link" href={item.url} target="_blank" rel="noreferrer">🔗 {item.placementId ? '詳細' : '記事'}</a>}
                   </div>
                 );
               })}
@@ -567,29 +759,33 @@ export default function HomePage() {
         </div>
 
         <div className="ns-viewer-wrap">
+          <EffectLayer ref={effectRef} effect={effect} color={effectColor} />
           <model-viewer
             ref={viewerRef}
-            src={AVATAR_SRC}
-            alt="ニュースを読み上げるロボットのアバター"
+            src={viewerSrc}
+            alt={summoned ? `${summoned.title}の3Dモデル` : 'ニュースを読み上げるロボットのアバター'}
             ar=""
             ar-modes="webxr scene-viewer quick-look"
             ar-placement="floor"
+            ar-scale={summoned?.realScale ? 'fixed' : 'auto'}
             camera-controls=""
             disable-zoom=""
             disable-pan=""
             touch-action="pan-y"
             interaction-prompt="none"
-            camera-orbit={reality ? '0deg 78deg 22m' : '0deg 80deg 14m'}
-            camera-target={reality ? '0m 3.6m 0m' : '0m 2.3m 0m'}
-            field-of-view="30deg"
+            camera-orbit={summoned ? undefined : reality ? '0deg 78deg 22m' : '0deg 80deg 14m'}
+            camera-target={summoned ? undefined : reality ? '0m 3.6m 0m' : '0m 2.3m 0m'}
+            field-of-view={summoned ? undefined : '30deg'}
+            auto-rotate={summoned ? '' : undefined}
             shadow-intensity="1"
             exposure="1.1"
             autoplay=""
-            animation-name={animation}
+            animation-name={summoned ? undefined : animation}
             animation-crossfade-duration="300"
             onClick={greet}
           >
-            <button slot="ar-button" className="ns-chip ns-ar ns-ar-btn">🕶 床に置くAR</button>
+            {/* 床に置くARのボタンは隠し、「⋯」メニューから起動する */}
+            <span slot="ar-button" style={{ display: 'none' }} />
 
             {/* 現実空間モード・AR中に表示するパネル（model-viewer の中に置くと WebXR の AR 中も表示される） */}
             <div className={`ns-overlay${overlayShown ? ' is-shown' : ''}`} onClick={e => e.stopPropagation()}>
@@ -600,13 +796,18 @@ export default function HomePage() {
                 )}
                 {reality && cameraState === 'starting' && <div className="ns-overlay-note">カメラを起動しています…</div>}
               </div>
+              <div className="ns-remote-extra">
+                {summoned && <button className="ns-chip" onClick={unsummon}>← アバター</button>}
+                <button className="ns-chip" onClick={() => setEffectOpen(o => !o)}>🎨 エフェクト</button>
+                <button className="ns-chip" onClick={takePhoto} disabled={photoBusy}>{photoBusy ? '保存中…' : '📸 撮影'}</button>
+              </div>
               <div className="ns-remote" role="toolbar" aria-label="ニュースの操作">
                 <button onClick={() => playStep(-1)} aria-label="前のニュース" disabled={!newsData}>⏮</button>
                 <button className="is-main" onClick={toggleAutoPlay} aria-label={autoPlay ? '連続再生を止める' : 'ニュースを連続で読む'} disabled={!newsData}>
                   {autoPlay ? '⏸' : '▶'}
                 </button>
                 <button onClick={() => playStep(1)} aria-label="次のニュース" disabled={!newsData}>⏭</button>
-                <button onClick={openAsk} aria-label="質問する">💬</button>
+                <button onClick={openAsk} aria-label="アバターと話す">💬</button>
                 <button onClick={toggleMute} aria-label={muted ? '音声をオンにする' : '音声をオフにする'}>{muted ? '🔇' : '🔊'}</button>
                 {reality && !arActive && <button className="ns-remote-exit" onClick={() => { stopAll(); exitReality(); }}>終了</button>}
               </div>
@@ -618,18 +819,56 @@ export default function HomePage() {
             <button className="ns-chip" onClick={toggleMute} aria-pressed={muted} aria-label={muted ? '音声をオンにする' : '音声をオフにする'}>
               {muted ? '🔇' : '🔊'}
             </button>
-            {isTalking || autoPlay ? (
+            {summoned ? (
+              <button className="ns-chip" onClick={unsummon}>← アバター</button>
+            ) : isTalking || autoPlay ? (
               <button className="ns-chip" onClick={stopAll}>⏹ 停止</button>
             ) : (
               <button className="ns-chip" onClick={toggleAutoPlay} disabled={!newsData}>▶ 連続再生</button>
             )}
-            <button className="ns-chip" onClick={openAsk}>💬 質問</button>
-            <button className="ns-chip ns-chip-primary" onClick={enterReality}>📷 現実空間で聞く</button>
+            <button className="ns-chip" onClick={openAsk}>💬 話す</button>
+            <button className="ns-chip" onClick={() => setEffectOpen(o => !o)} aria-label="エフェクト" aria-expanded={effectOpen}>🎨</button>
+            {summoned && <button className="ns-chip" onClick={takePhoto} disabled={photoBusy} aria-label="写真を撮る">📸</button>}
+            <button className="ns-chip ns-chip-primary" onClick={enterReality}>📷 現実空間</button>
           </div>
         </div>
       </section>
 
+      {effectOpen && (
+        <div className="ns-fx-panel" role="dialog" aria-label="エフェクト">
+          <div className="ns-fx-head">
+            <b>🎨 エフェクト</b>
+            {!premium.active && <button className="ns-fx-premium" onClick={() => setPremiumOpen(true)}>⭐ プレミアムで全部使える</button>}
+            <button className="ask-close" onClick={() => setEffectOpen(false)} aria-label="閉じる">✕</button>
+          </div>
+          <div className="ns-fx-list">
+            {EFFECTS.map(e => {
+              const locked = !premium.active && e.id !== 'none' && e.id !== 'magic';
+              return (
+                <button key={e.id} className={`ns-fx${effect === e.id ? ' is-on' : ''}`} onClick={() => chooseEffect(e.id)}>
+                  <span>{e.icon}</span>{e.label}{locked && <small>⭐</small>}
+                </button>
+              );
+            })}
+          </div>
+          {effect === 'magic' && (
+            <div className="ns-fx-colors">
+              {MAGIC_COLORS.map((c, i) => (
+                <button key={c} className={`ns-fx-color${effectColor === c ? ' is-on' : ''}`} style={{ background: c }}
+                  onClick={() => chooseEffect('magic', c)} aria-label={`魔法陣の色 ${i + 1}${i > 0 && !premium.active ? '（プレミアム）' : ''}`}>
+                  {i > 0 && !premium.active ? '⭐' : ''}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
       {!arActive && askSheet}
+      <PremiumSheet open={premiumOpen} onClose={() => setPremiumOpen(false)} config={config} premium={premium}
+        onActivated={setPremium} />
+      {toast && <div className="ns-toast" role="status">{toast}</div>}
+      {menuOpen && <div className="ns-menu-backdrop" onClick={() => setMenuOpen(false)} />}
     </div>
   );
 }

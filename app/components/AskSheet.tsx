@@ -15,14 +15,17 @@ type Props = {
   busy: boolean;
   onSend: (question: string) => void;
   onBeforeListen: () => void;
+  /** アバターが答えを読み終えるたびに増える。ハンズフリー会話中はこれを合図に次を聞き取る */
+  answerTick?: number;
 };
 
 // わからない言葉をアバターに質問する画面（下から出るシート）
-export default function AskSheet({ open, onClose, newsTitle, terms, termsLoading, messages, busy, onSend, onBeforeListen }: Props) {
+export default function AskSheet({ open, onClose, newsTitle, terms, termsLoading, messages, busy, onSend, onBeforeListen, answerTick = 0 }: Props) {
   const [input, setInput] = useState('');
   const [listening, setListening] = useState(false);
   const [micError, setMicError] = useState('');
   const [canListen, setCanListen] = useState(false);
+  const [handsFree, setHandsFree] = useState(false); // 話しかけ続けられる会話モード
   const recRef = useRef<any>(null);
   const logRef = useRef<HTMLDivElement | null>(null);
 
@@ -38,6 +41,13 @@ export default function AskSheet({ open, onClose, newsTitle, terms, termsLoading
       setListening(false);
     }
   }, [open]);
+
+  // ハンズフリー：答えを読み終えたら自動でマイクを開く
+  const toggleMicRef = useRef<() => void>(() => {});
+  useEffect(() => {
+    if (open && handsFree && answerTick > 0) toggleMicRef.current();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [answerTick]);
 
   const send = (q: string) => {
     const text = q.trim();
@@ -81,6 +91,8 @@ export default function AskSheet({ open, onClose, newsTitle, terms, termsLoading
     }
   };
 
+  toggleMicRef.current = () => { if (!listening) toggleMic(); };
+
   if (!open) return null;
 
   return (
@@ -88,11 +100,18 @@ export default function AskSheet({ open, onClose, newsTitle, terms, termsLoading
       <div className="ask-sheet" role="dialog" aria-label="ニュースについて質問" onClick={e => e.stopPropagation()}>
         <div className="ask-head">
           <div>
-            <div className="ask-title">💬 わからない言葉を聞いてみよう</div>
+            <div className="ask-title">💬 アバターと話そう</div>
             {newsTitle && <div className="ask-context">いまのニュース：{newsTitle}</div>}
           </div>
           <button className="ask-close" onClick={onClose} aria-label="閉じる">✕</button>
         </div>
+
+        {canListen && (
+          <label className="ask-handsfree">
+            <input type="checkbox" checked={handsFree} onChange={e => { setHandsFree(e.target.checked); if (e.target.checked && !busy) toggleMic(); }} />
+            🎙 会話モード（答えのあと自動で聞き取ります）
+          </label>
+        )}
 
         {newsTitle && (
           <div className="ask-terms">
@@ -113,7 +132,7 @@ export default function AskSheet({ open, onClose, newsTitle, terms, termsLoading
         <div className="ask-log" ref={logRef}>
           {messages.length === 0 && !busy && (
             <div className="ask-empty">
-              ニュースに出てきた言葉や、よくわからなかったことを聞いてね。ボクが声で答えるよ。
+              ニュースに出てきた言葉、わからなかったこと、なんでも話しかけてね。ボクが声で答えるよ。
             </div>
           )}
           {messages.map((m, i) => (

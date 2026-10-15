@@ -689,6 +689,8 @@ export default function HomePage() {
           )}
         </header>
 
+        <p className="ns-disclosure"><span className="ns-pr">PR</span><span>当Webサイトにはプロモーションが含まれます</span></p>
+
         {loadError ? (
           <div className="ns-state">
             ニュースを読み込めませんでした。

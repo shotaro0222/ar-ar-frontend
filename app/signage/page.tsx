@@ -354,7 +354,7 @@ function SignageInner() {
         <div>
           <div className="sg-logo">🔮 News Summoner</div>
           <h1>{state.reason === 'expired' ? 'ご契約の有効期限が切れています' : 'このサイネージURLは無効です'}</h1>
-          <p>{state.reason === 'expired' ? 'お支払いを確認でき次第、自動で表示が再開されます。' : '管理画面で発行されたURLをご確認ください。'}</p>
+          <p>{state.reason === 'expired' ? 'お支払い（お振込み）を確認でき次第、表示を再開します。' : '管理画面で発行されたURLをご確認ください。'}</p>
         </div>
       </div>
     );

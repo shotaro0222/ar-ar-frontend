@@ -27,12 +27,29 @@ type Topic = { id: string; region: string; keywords: string[] | string; feeds: s
 type Settings = {
   premiumEnabled: boolean; premiumLinkUrl?: string; premiumPrice?: string; premiumDays?: number; contactUrl?: string;
   signagePlans?: Plan[]; localTopics?: Topic[];
+  paymentMode?: 'bank' | 'stripe'; bankInfo?: string; applyNotifyUrl?: string; invoiceNote?: string;
 };
+type Application = {
+  id: string; createdAt: string; status: 'new' | 'invoiced' | 'active' | 'cancelled'; plan: string; screens: number;
+  company: string; name: string; email: string; phone?: string; place?: string; touch?: boolean; note?: string; memo?: string; deviceIds?: string[];
+};
+const APP_STATUS: Record<Application['status'], string> = { new: '🆕 新規', invoiced: '🧾 請求済み・入金待ち', active: '✅ 有効化済み', cancelled: '✖ キャンセル' };
+
+// 有効期限の延長（期限切れなら今日から数える）
+const todayStr = () => new Date(Date.now() + 9 * 3600_000).toISOString().slice(0, 10);
+function addMonths(d: string, n: number) {
+  const t = new Date(Date.parse(d + 'T00:00:00Z'));
+  const day = t.getUTCDate();
+  t.setUTCMonth(t.getUTCMonth() + n);
+  if (t.getUTCDate() !== day) t.setUTCDate(0);
+  return t.toISOString().slice(0, 10);
+}
+const daysLeft = (d?: string) => (d ? Math.round((Date.parse(d) - Date.parse(todayStr())) / 86400_000) : Infinity);
 type Config = {
   placements: Placement[]; partners: Partner[]; devices: Device[]; settings: Settings; surveys: Survey[]; rev?: string;
   features?: { stats: boolean; assets: boolean; stripe: boolean };
 };
-type Tab = 'placements' | 'partners' | 'devices' | 'surveys' | 'premium' | 'settings' | 'stats';
+type Tab = 'applications' | 'placements' | 'partners' | 'devices' | 'surveys' | 'premium' | 'settings' | 'stats';
 
 const KIND_LABEL: Record<string, string> = {
   sponsor_impression: 'スポンサー表示', sponsor_open: 'スポンサー3D表示', sponsor_link: 'スポンサーリンク',
@@ -49,7 +66,7 @@ export default function AdminPage() {
   const [token, setToken] = useState('');
   const [input, setInput] = useState('');
   const [cfg, setCfg] = useState<Config | null>(null);
-  const [tab, setTab] = useState<Tab>('placements');
+  const [tab, setTab] = useState<Tab>('applications');
   const [msg, setMsg] = useState('');
   const [dirty, setDirty] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -121,7 +138,7 @@ export default function AdminPage() {
       <header className="ad-head">
         <h1>🔮 管理画面</h1>
         <nav>
-          {([['placements', '🎁 3D掲載枠'], ['partners', '🤝 提携メディア'], ['devices', '📺 サイネージ'], ['surveys', '📝 サーベイ'], ['premium', '⭐ プレミアム'], ['settings', '⚙️ 料金・ローカル'], ['stats', '📊 集計']] as [Tab, string][]).map(([k, l]) => (
+          {([['applications', '📥 申し込み'], ['placements', '🎁 3D掲載枠'], ['partners', '🤝 提携メディア'], ['devices', '📺 サイネージ'], ['surveys', '📝 サーベイ'], ['premium', '⭐ プレミアム'], ['settings', '⚙️ 料金・ローカル'], ['stats', '📊 集計']] as [Tab, string][]).map(([k, l]) => (
             <button key={k} className={tab === k ? 'is-on' : ''} onClick={() => setTab(k)}>{l}</button>
           ))}
         </nav>
@@ -141,6 +158,7 @@ export default function AdminPage() {
           {tab === 'premium' && <Premium cfg={cfg} update={update} api={api} origin={origin} />}
           {tab === 'settings' && <SettingsTab cfg={cfg} update={update} api={api} origin={origin} setMsg={setMsg} />}
           {tab === 'stats' && <Stats cfg={cfg} api={api} />}
+          {tab === 'applications' && <Applications cfg={cfg} api={api} origin={origin} setMsg={setMsg} dirty={dirty} reload={reload} goDevices={() => setTab('devices')} />}
         </main>
       )}
     </div>
@@ -240,6 +258,102 @@ function Placements({ cfg, update, api, setMsg }: Sub & { api: any; setMsg: (m: 
   );
 }
 
+// ---------------- 申し込み（振込・手動で有効化） ----------------
+function Applications({ cfg, api, origin, setMsg, dirty, reload, goDevices }: { cfg: Config; api: any; origin: string; setMsg: (m: string) => void; dirty: boolean; reload: () => void; goDevices: () => void }) {
+  const [apps, setApps] = useState<Application[] | null>(null);
+  const [filter, setFilter] = useState<'open' | 'all'>('open');
+  const [months, setMonths] = useState<Record<string, number>>({});
+  const [issued, setIssued] = useState<Record<string, string>>({});
+  const load = useCallback(() => { api('/api/admin/applications').then((d: any) => setApps(d.applications || [])).catch((e: any) => setMsg(e.message)); }, [api, setMsg]);
+  useEffect(() => { load(); }, [load]);
+
+  const planName = (id: string) => cfg.settings.signagePlans?.find(p => p.id === id)?.name || id;
+  const price = (id: string) => cfg.settings.signagePlans?.find(p => p.id === id)?.price || 0;
+  const setStatus = async (a: Application, status: Application['status'], memo?: string) => {
+    try { await api('/api/admin/applications/update', { method: 'POST', body: JSON.stringify({ id: a.id, status, memo }) }); load(); } catch (e: any) { setMsg(e.message); }
+  };
+  const saveMemo = async (a: Application, memo: string) => {
+    try { await api('/api/admin/applications/update', { method: 'POST', body: JSON.stringify({ id: a.id, memo }) }); } catch (e: any) { setMsg(e.message); }
+  };
+  const activate = async (a: Application) => {
+    if (dirty) { setMsg('未保存の変更があります。先に「保存する」を押してから有効化してください'); return; }
+    const m = months[a.id] || 1;
+    if (!confirm(`${a.company} の入金（${m}ヶ月分・${(price(a.plan) * a.screens * m).toLocaleString()}円）を確認しましたか？\nサイネージURLを発行して有効化します。`)) return;
+    try {
+      const d = await api('/api/admin/applications/activate', { method: 'POST', body: JSON.stringify({ id: a.id, months: m }) });
+      const lines = d.devices.map((dv: any, i: number) => [
+        d.devices.length > 1 ? `■ 画面${i + 1}（${dv.name}）` : '',
+        `サイネージに表示するURL：\n${origin}/signage?device=${dv.key}&autostart=1`,
+        `表示内容を変える設定URL（他の方には教えないでください）：\n${origin}/signage/manage?k=${dv.ownerKey}`
+      ].filter(Boolean).join('\n'));
+      const mail = `${a.company}\n${a.name} 様\n\nこの度は News Summoner for Signage にお申し込みいただき、ありがとうございます。\nご入金を確認いたしましたので、ご利用を開始いたしました。\n\nプラン：${planName(a.plan)} × ${a.screens}画面\nご利用期限：${d.devices[0].paidUntil}（更新のご案内は期限前にお送りします）\n\n${lines.join('\n\n')}\n\n【はじめ方】\nサイネージ端末のブラウザ（Chrome 推奨）で上のURLを開くと、すぐに表示が始まります。\n音声を自動で流す場合は、Chrome を「--kiosk --autoplay-policy=no-user-gesture-required」で起動してください。\n\nご不明な点がございましたら、このメールにご返信ください。\n今後ともよろしくお願いいたします。`;
+      setIssued(x => ({ ...x, [a.id]: mail }));
+      setMsg('有効化しました。下のメール文面をコピーしてお客様に送ってください');
+      load();
+      reload();
+    } catch (e: any) { setMsg(e.message); }
+  };
+
+  const expiring = cfg.devices.filter(d => d.active && d.paidUntil && daysLeft(d.paidUntil) <= 7);
+  const shown = (apps || []).filter(a => filter === 'all' || a.status === 'new' || a.status === 'invoiced' || issued[a.id]);
+
+  return (
+    <section>
+      {expiring.length > 0 && (
+        <div className="ad-alert">
+          <b>⏰ 期限が近い・切れているサイネージ（{expiring.length}台）</b>
+          <ul>{expiring.map(d => <li key={d.id}>{d.name}：{d.paidUntil}（{daysLeft(d.paidUntil) < 0 ? `${-daysLeft(d.paidUntil)}日前に終了` : `あと${daysLeft(d.paidUntil)}日`}）{d.contact ? ` ／ ${d.contact}` : ''}</li>)}</ul>
+          <button className="ad-sub" onClick={goDevices}>サイネージタブで延長する</button>
+        </div>
+      )}
+      <div className="ad-intro">
+        <p>LP の申し込みフォームから届いた申し込みです。<b>請求書を送ったら「請求済み」</b>、<b>入金を確認したら「入金確認して有効化」</b>を押すと、サイネージURLと設定URLが発行され、お客様に送るメール文面が表示されます。</p>
+        <div className="ad-row" style={{ flex: 'none' }}>
+          <select value={filter} onChange={e => setFilter(e.target.value as any)} style={{ width: 'auto' }}>
+            <option value="open">対応中のみ</option><option value="all">すべて</option>
+          </select>
+          <button className="ad-sub" onClick={load}>更新</button>
+        </div>
+      </div>
+      {!apps ? <p>読み込み中…</p> : shown.length === 0 ? <p className="ad-empty">対応中の申し込みはありません</p> : shown.map(a => (
+        <div key={a.id} className={`ad-card${a.status === 'cancelled' ? ' is-off' : ''}`}>
+          <div className="ad-card-head">
+            <span className="ad-type">{a.company}<small className="ad-sub-text">　{new Date(a.createdAt).toLocaleString('ja-JP')}</small></span>
+            <span className={`ad-status st-${a.status}`}>{APP_STATUS[a.status]}</span>
+          </div>
+          <div className="ad-grid2">
+            <div>
+              <div>👤 {a.name} 様　✉ <a href={`mailto:${a.email}`}>{a.email}</a>{a.phone && <>　☎ {a.phone}</>}</div>
+              <div>📺 {planName(a.plan)} × {a.screens}画面（月額 <b>{(price(a.plan) * a.screens).toLocaleString()}円</b>）{a.touch === false && '・タッチなし'}</div>
+              {a.place && <div>📍 {a.place}</div>}
+              {a.note && <div className="ad-note">💬 {a.note}</div>}
+            </div>
+            <Field label="管理メモ（請求書番号・入金日など）">
+              <input defaultValue={a.memo || ''} onBlur={e => e.target.value !== (a.memo || '') && saveMemo(a, e.target.value)} />
+            </Field>
+          </div>
+          {a.status !== 'active' && a.status !== 'cancelled' && (
+            <div className="ad-row ad-actions">
+              {a.status === 'new' && <button className="ad-sub" onClick={() => setStatus(a, 'invoiced')}>🧾 請求済みにする</button>}
+              <select value={months[a.id] || 1} onChange={e => setMonths(x => ({ ...x, [a.id]: parseInt(e.target.value, 10) }))} style={{ width: 'auto' }}>
+                {[1, 3, 6, 12].map(n => <option key={n} value={n}>{n}ヶ月分（{(price(a.plan) * a.screens * n).toLocaleString()}円）</option>)}
+              </select>
+              <button onClick={() => activate(a)}>💴 入金確認して有効化</button>
+              <button className="ad-del" onClick={() => confirm('キャンセルにしますか？') && setStatus(a, 'cancelled')}>キャンセル</button>
+            </div>
+          )}
+          {a.status === 'cancelled' && <button className="ad-sub" onClick={() => setStatus(a, 'new')}>対応中に戻す</button>}
+          {issued[a.id] && (
+            <Field label="お客様に送るメール（コピーして送信）">
+              <textarea readOnly rows={14} value={issued[a.id]} onFocus={e => e.target.select()} />
+            </Field>
+          )}
+        </div>
+      ))}
+    </section>
+  );
+}
+
 // ---------------- 提携メディア ----------------
 function Partners({ cfg, update, origin }: Sub & { origin: string }) {
   const set = (i: number, patch: Partial<Partner>) => update(c => { c.partners[i] = { ...c.partners[i], ...patch }; return c; });
@@ -285,7 +399,10 @@ function Devices({ cfg, update, origin }: Sub & { origin: string }) {
       {cfg.devices.map((d, i) => (
         <div key={d.id} className={`ad-card${d.active ? '' : ' is-off'}`}>
           <div className="ad-card-head">
-            <span className="ad-type">📺 {d.name || '無題の端末'}</span>
+            <span className="ad-type">📺 {d.name || '無題の端末'}
+              {d.paidUntil && daysLeft(d.paidUntil) < 0 && <small className="ad-badge ad-badge-red">期限切れ</small>}
+              {d.paidUntil && daysLeft(d.paidUntil) >= 0 && daysLeft(d.paidUntil) <= 7 && <small className="ad-badge">あと{daysLeft(d.paidUntil)}日</small>}
+            </span>
             <label className="ad-toggle"><input type="checkbox" checked={d.active} onChange={e => set(i, { active: e.target.checked })} /> 有効</label>
             <button className="ad-del" onClick={() => confirm('削除しますか？') && update(c => { c.devices.splice(i, 1); return c; })}>削除</button>
           </div>
@@ -301,8 +418,18 @@ function Devices({ cfg, update, origin }: Sub & { origin: string }) {
                 <option value="standard">スタンダード</option>
               </select>
             </Field>
-            <Field label="有効期限（空欄＝無期限）" hint={d.stripeSub ? 'Stripe の月額契約は自動で延長されます' : '請求書払いの場合はここで延長'}>
+            <Field label="有効期限（空欄＝無期限）" hint={d.stripeSub ? 'Stripe の月額契約は自動で延長されます' : '入金を確認したら下のボタンで延長 →「保存する」'}>
               <input type="date" value={d.paidUntil || ''} onChange={e => set(i, { paidUntil: e.target.value || undefined })} />
+              {!d.stripeSub && (
+                <span className="ad-extend">
+                  {[1, 3, 12].map(n => (
+                    <button key={n} type="button" className="ad-sub" onClick={() => {
+                      const base = d.paidUntil && d.paidUntil > todayStr() ? d.paidUntil : todayStr();
+                      set(i, { paidUntil: addMonths(base, n), active: true });
+                    }}>＋{n}ヶ月</button>
+                  ))}
+                </span>
+              )}
             </Field>
             <Field label="表示モード">
               <select value={d.mode || 'news'} onChange={e => set(i, { mode: e.target.value as Device['mode'] })}>
@@ -485,18 +612,38 @@ function SettingsTab({ cfg, update, api, origin, setMsg }: Sub & { api: any; ori
   return (
     <section>
       <div className="ad-card">
+        <h3>💴 お支払い方法</h3>
+        <div className="ad-row">
+          <label className="ad-toggle"><input type="radio" name="pm" checked={(cfg.settings.paymentMode || 'bank') === 'bank'} onChange={() => update(c => { c.settings.paymentMode = 'bank'; return c; })} /> 銀行振込（申し込みフォーム → 入金確認後に「📥 申し込み」タブで手動で有効化）</label>
+          <label className="ad-toggle"><input type="radio" name="pm" checked={cfg.settings.paymentMode === 'stripe'} onChange={() => update(c => { c.settings.paymentMode = 'stripe'; return c; })} /> Stripe（カード決済で自動発行）</label>
+        </div>
+        {(cfg.settings.paymentMode || 'bank') === 'bank' ? (
+          <>
+            <Field label="振込先（申し込み完了画面と契約者の設定画面に表示）">
+              <textarea rows={3} value={cfg.settings.bankInfo || ''} onChange={e => update(c => { c.settings.bankInfo = e.target.value; return c; })} placeholder={'〇〇銀行 〇〇支店 普通 1234567\n口座名義：〇〇〇〇'} />
+            </Field>
+            <Field label="申し込み完了画面の補足"><input value={cfg.settings.invoiceNote || ''} onChange={e => update(c => { c.settings.invoiceNote = e.target.value; return c; })} placeholder="3営業日以内に請求書をメールでお送りします。お支払い期限は請求書発行日から14日です。" /></Field>
+            <Field label="申し込み通知の Webhook（任意）" hint="Slack の Incoming Webhook または Discord の Webhook URL。申し込みがあるとすぐ通知されます">
+              <input value={cfg.settings.applyNotifyUrl || ''} onChange={e => update(c => { c.settings.applyNotifyUrl = e.target.value; return c; })} placeholder="https://hooks.slack.com/services/…" />
+            </Field>
+          </>
+        ) : (
+          <p className="ad-small">
+            Stripe で月額の支払いリンク（Payment Link）をプランごとに作り、「支払い後」のリダイレクト先に
+            <code>{origin}/signage/start?session_id={'{CHECKOUT_SESSION_ID}'}</code> を設定してください。
+            支払いが確認されると専用URLが自動で発行され、月額の継続も自動で確認します（Workers に STRIPE_SECRET_KEY が必要：{cfg.features?.stripe ? '設定済み' : '未設定'}）。
+          </p>
+        )}
+      </div>
+
+      <div className="ad-card">
         <h3>📺 サイネージの料金プラン（LP と申し込みに使用）</h3>
-        <p className="ad-small">
-          Stripe で月額の支払いリンク（Payment Link）をプランごとに作り、「支払い後」のリダイレクト先に
-          <code>{origin}/signage/start?session_id={'{CHECKOUT_SESSION_ID}'}</code> を設定してください。
-          支払いが確認されると専用URLが自動で発行され、月額の継続も自動で確認します（Workers に STRIPE_SECRET_KEY が必要：{cfg.features?.stripe ? '設定済み' : '未設定'}）。
-        </p>
         {plans.map((p, i) => (
           <div key={p.id} className="ad-plan">
             <div className="ad-row">
               <Field label={`プランID：${p.id}`}><input value={p.name} onChange={e => setPlan(i, { name: e.target.value })} /></Field>
               <Field label="月額（円・税込）"><input type="number" min={0} value={p.price} onChange={e => setPlan(i, { price: parseInt(e.target.value, 10) || 0 })} /></Field>
-              <Field label="Stripe 支払いリンク"><input value={p.linkUrl || ''} onChange={e => setPlan(i, { linkUrl: e.target.value })} placeholder="https://buy.stripe.com/..." /></Field>
+              <Field label="Stripe 支払いリンク（Stripe 利用時のみ）"><input value={p.linkUrl || ''} onChange={e => setPlan(i, { linkUrl: e.target.value })} placeholder="https://buy.stripe.com/..." /></Field>
             </div>
             <Field label="できること（1行に1つ）"><textarea rows={4} value={Array.isArray(p.features) ? p.features.join('\n') : p.features} onChange={e => setPlan(i, { features: e.target.value })} /></Field>
             <label className="ad-toggle"><input type="checkbox" checked={!!p.recommended} onChange={e => setPlan(i, { recommended: e.target.checked })} /> おすすめ表示</label>

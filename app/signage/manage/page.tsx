@@ -12,7 +12,7 @@ import { Agg, newSurvey, Survey, surveyProblems } from '../../lib/survey';
 
 type LocalItem = { id: string; title: string; description: string; linkUrl?: string };
 type Device = {
-  id: string; name: string; key: string; region?: string; plan: string; paidUntil?: string; touch: boolean;
+  id: string; name: string; key: string; region?: string; plan: string; paidUntil?: string; stripeSub?: string; touch: boolean;
   mode: 'news' | 'survey' | 'quiz' | 'mix'; surveyId?: string; localItems: LocalItem[]; localKeywords: string[] | string; localFeeds: string[] | string;
 };
 type Tab = 'basic' | 'local' | 'survey' | 'claim';
@@ -40,6 +40,7 @@ function Inner() {
   const [dirty, setDirty] = useState(false);
   const [origin, setOrigin] = useState('');
   const [code, setCode] = useState('');
+  const [payment, setPayment] = useState<{ mode: 'bank' | 'stripe'; bankInfo: string | null }>({ mode: 'bank', bankInfo: null });
   const [claim, setClaim] = useState<any>(null);
 
   const api = useCallback(async (path: string, init: RequestInit = {}) => {
@@ -59,6 +60,7 @@ function Inner() {
     if (!key) return;
     api('/api/owner/device').then(d => {
       setDev(d.device); setActive(d.active); setFeatures(d.features); setSurveys(d.surveys || []); setAggs(d.aggs || {}); setDirty(false);
+      if (d.payment) setPayment(d.payment);
     }).catch(e => setMsg(e.message));
   }, [key, api]);
   useEffect(load, [load]);
@@ -106,7 +108,7 @@ function Inner() {
         </div>
       </header>
       {msg && <p className="ad-msg" onClick={() => setMsg('')}>{msg}</p>}
-      {!active && <p className="ad-msg">⚠ ご契約の有効期限（{dev.paidUntil}）が切れています。お支払いが確認されると自動で再開します。</p>}
+      {!active && <p className="ad-msg">⚠ ご契約の有効期限（{dev.paidUntil}）が切れています。{dev.stripeSub ? 'お支払いが確認されると自動で再開します。' : 'お振込みを確認次第、表示を再開します。'}</p>}
       <main>
         {tab === 'basic' && (
           <section>
@@ -135,7 +137,14 @@ function Inner() {
             </div>
             <div className="ad-card">
               <h3>ご契約</h3>
-              <p className="ad-small">プラン：{dev.plan === 'standard' ? 'スタンダード' : dev.plan === 'lite' ? 'ライト' : '法人契約'}{dev.paidUntil ? `／次回更新：${dev.paidUntil} ごろ` : ''}</p>
+              <p className="ad-small">プラン：{dev.plan === 'standard' ? 'スタンダード' : dev.plan === 'lite' ? 'ライト' : '法人契約'}{dev.paidUntil ? `／ご利用期限：${dev.paidUntil}` : ''}</p>
+              {!dev.stripeSub && dev.paidUntil && (
+                <div className="ad-alert">
+                  <b>💴 継続のお支払い</b>
+                  <p className="ad-small" style={{ margin: '4px 0' }}>ご利用期限（{dev.paidUntil}）までに次の期間分をお振込みください。入金を確認後、期限を延長します（表示は止まりません）。</p>
+                  {payment.bankInfo && <pre className="ad-bank">{payment.bankInfo}</pre>}
+                </div>
+              )}
               <label className="ad-field"><span>サイネージURL</span><input readOnly value={signageUrl} onFocus={e => e.target.select()} /></label>
             </div>
           </section>

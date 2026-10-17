@@ -8,6 +8,7 @@ import PremiumSheet from './components/PremiumSheet';
 import { pickJapaneseVoice, splitSentences, startTalk, stopTalk, TalkHolder } from './lib/speech';
 import { API_BASE, checkPremium, claimStripe, EMPTY_CONFIG, fetchConfig, Placement, PremiumState, PublicConfig, sponsorFor, track } from './lib/api';
 import { capturePhoto } from './lib/photo';
+import { trackEvent } from './lib/analytics';
 // アバター（RobotExpressive / CC0）。public/models に同梱して外部依存をなくしている
 const AVATAR_SRC = '/models/RobotExpressive.glb';
 
@@ -99,6 +100,7 @@ export default function HomePage() {
   const [photoBusy, setPhotoBusy] = useState(false);
   const [toast, setToast] = useState('');
   const [localRegion, setLocalRegion] = useState('');
+  const [localNews, setLocalNews] = useState<NewsItem[]>([]);
   const effectRef = useRef<HTMLCanvasElement | null>(null);
   const summonedRef = useRef<Placement | null>(null);
   summonedRef.current = summoned;
@@ -147,14 +149,25 @@ export default function HomePage() {
   // ニュース＋ローカル掲載枠（自治体・観光PR）を1つのデータにまとめる
   useEffect(() => {
     if (!rawNews) return;
-    const locals: NewsItem[] = config.placements
-      .filter(p => p.type === 'local' && (!localRegion || p.region === localRegion))
-      .map(p => ({ title: p.title, url: p.linkUrl || '', summary: p.description, summaryKind: 'ai', source: p.sponsor, placementId: p.id }));
+    const locals: NewsItem[] = [
+      ...config.placements
+        .filter(p => p.type === 'local' && (!localRegion || p.region === localRegion))
+        .map(p => ({ title: p.title, url: p.linkUrl || '', summary: p.description, summaryKind: 'ai' as const, source: p.sponsor, placementId: p.id })),
+      ...localNews // キーワードで自動収集した地域のニュース
+    ];
     const data: NewsData = locals.length ? { local: locals, ...rawNews } : { ...rawNews };
     setNewsData(data);
     const first = categoriesOf(data)[0];
     if (first) setActiveCategory(prev => (localRegion && locals.length ? 'local' : listOf(data, prev).length ? prev : first));
-  }, [rawNews, config, localRegion]);
+  }, [rawNews, config, localRegion, localNews]);
+
+  // ?local=地域名 のときは、その地域のキーワードで集めたニュースも読み込む
+  useEffect(() => {
+    if (!localRegion) return;
+    fetch(`${API_BASE}/api/local?region=${encodeURIComponent(localRegion)}`).then(r => r.json())
+      .then(d => setLocalNews((d.items || []).filter((i: NewsItem) => i.summary).map((i: NewsItem) => ({ ...i, summaryKind: i.summaryKind || 'rss' }))))
+      .catch(() => {});
+  }, [localRegion]);
 
   const showToast = useCallback((m: string) => {
     setToast(m);
@@ -286,6 +299,7 @@ export default function HomePage() {
     const hasAiSummary = item.summaryKind === 'ai' && !!item.summary;
     setCurrent({ cat, item });
     setSummoned(null); // 3Dを表示中ならアバターに戻して読む
+    trackEvent('news_play', { category: cat, auto: !!opts.auto });
     if (chatForRef.current !== item.url) { chatForRef.current = item.url; setChat([]); }
     setBubble({ kind: 'news', label, title: item.title, sentences: hasAiSummary ? splitSentences(item.summary!) : [], source: item.source, loading: !hasAiSummary });
     setActiveSeg(-1);
@@ -402,6 +416,7 @@ export default function HomePage() {
     stopAll();
     setChat(c => [...c, { role: 'user', content: question }]);
     setAsking(true);
+    trackEvent('ask_avatar', { has_news: !!cur });
     setBubble({ kind: 'answer', label: '質問', title: question, loading: true });
     setAnimation(ANIM.think);
 
@@ -449,6 +464,7 @@ export default function HomePage() {
     stopAll();
     setSummoned(p);
     track(p.type === 'sponsor' ? 'sponsor_open' : 'local_open', p.id, false);
+    trackEvent('summon_3d', { placement: p.id, type: p.type });
     const sentences = splitSentences(p.description);
     setBubble({ kind: 'placement', label: p.type === 'sponsor' ? 'PR' : p.region || 'ローカル', title: p.title, sentences, source: p.sponsor, placement: p });
     const intro = p.type === 'sponsor' ? `${p.sponsor}の提供で、${p.title}を呼び出しました。` : `${p.region ? p.region + 'の' : ''}${p.title}を呼び出しました。`;
@@ -490,6 +506,7 @@ export default function HomePage() {
         caption
       });
       track('photo', p?.id || 'avatar', false);
+      trackEvent('ar_photo', { premium: premium.active });
       const file = new File([blob], `news-summoner-${Date.now()}.jpg`, { type: 'image/jpeg' });
       const nav: any = navigator;
       if (nav.canShare?.({ files: [file] })) {
@@ -523,6 +540,7 @@ export default function HomePage() {
 
   // ---------------- 現実空間モード ----------------
   const enterReality = async () => {
+    trackEvent('reality_mode');
     setReality(true);
     setCameraState('starting');
     try {
@@ -671,6 +689,7 @@ export default function HomePage() {
           </svg>
           <div className="ns-head-right">
             {newsData?.last_updated && <span className="ns-updated">更新 {formatUpdated(newsData.last_updated)}</span>}
+            <a className="ns-menu-btn ns-play-btn" href="/play" aria-label="ニュースクイズで遊ぶ" onClick={() => trackEvent('header_quiz')}>🎮</a>
             <button className="ns-menu-btn" onClick={() => setMenuOpen(o => !o)} aria-label="メニュー" aria-expanded={menuOpen}>⋯</button>
           </div>
           {menuOpen && (
@@ -681,7 +700,8 @@ export default function HomePage() {
                 </button>
               )}
               <button role="menuitem" onClick={openFloorAR}>🕶 床に置くAR（実験的）</button>
-              <a role="menuitem" href="/signage" target="_blank" rel="noreferrer">📺 サイネージ表示</a>
+              <a role="menuitem" href="/play" onClick={() => trackEvent('menu_click', { item: 'quiz' })}>🎮 ニュースクイズで遊ぶ</a>
+              <a role="menuitem" href="/business" onClick={() => trackEvent('menu_click', { item: 'business' })}>📺 サイネージに導入する（法人向け）</a>
               {config.contactUrl && (
                 <a role="menuitem" href={config.contactUrl} target="_blank" rel="noreferrer">🏢 3D掲載・導入のお問い合わせ</a>
               )}

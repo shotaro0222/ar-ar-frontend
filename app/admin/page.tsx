@@ -6,6 +6,9 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import Script from 'next/script';
 import { API_BASE } from '../lib/api';
+import SurveyEditor from '../components/SurveyEditor';
+import SurveyResults from '../components/SurveyResults';
+import { Agg, newSurvey, Survey, surveyProblems } from '../lib/survey';
 
 type Placement = {
   id: string; type: 'sponsor' | 'local'; active: boolean; title: string; sponsor: string; description: string;
@@ -13,16 +16,30 @@ type Placement = {
   realScale?: boolean; startAt?: string; endAt?: string;
 };
 type Partner = { id: string; name: string; domains: string[] | string; active: boolean; plan?: string; note?: string };
-type Device = { id: string; name: string; key: string; active: boolean; region?: string };
-type Settings = { premiumEnabled: boolean; premiumLinkUrl?: string; premiumPrice?: string; premiumDays?: number; contactUrl?: string };
-type Config = { placements: Placement[]; partners: Partner[]; devices: Device[]; settings: Settings; features?: { stats: boolean; assets: boolean; stripe: boolean } };
-type Tab = 'placements' | 'partners' | 'devices' | 'premium' | 'stats';
+type Device = {
+  id: string; name: string; key: string; active: boolean; region?: string;
+  plan?: 'lite' | 'standard' | 'internal'; paidUntil?: string; ownerKey?: string; contact?: string; stripeSub?: string;
+  touch?: boolean; mode?: 'news' | 'survey' | 'quiz' | 'mix'; surveyId?: string;
+  localKeywords?: string[] | string; localFeeds?: string[] | string; localItems?: any[];
+};
+type Plan = { id: string; name: string; price: number; interval: string; features: string[] | string; linkUrl?: string; recommended?: boolean };
+type Topic = { id: string; region: string; keywords: string[] | string; feeds: string[] | string };
+type Settings = {
+  premiumEnabled: boolean; premiumLinkUrl?: string; premiumPrice?: string; premiumDays?: number; contactUrl?: string;
+  signagePlans?: Plan[]; localTopics?: Topic[];
+};
+type Config = {
+  placements: Placement[]; partners: Partner[]; devices: Device[]; settings: Settings; surveys: Survey[]; rev?: string;
+  features?: { stats: boolean; assets: boolean; stripe: boolean };
+};
+type Tab = 'placements' | 'partners' | 'devices' | 'surveys' | 'premium' | 'settings' | 'stats';
 
 const KIND_LABEL: Record<string, string> = {
   sponsor_impression: 'スポンサー表示', sponsor_open: 'スポンサー3D表示', sponsor_link: 'スポンサーリンク',
   local_impression: 'ローカル表示', local_open: 'ローカル3D表示', local_link: 'ローカルリンク',
   photo: 'AR写真', embed_view: 'ウィジェット表示', embed_play: 'ウィジェット再生',
-  signage_play: 'サイネージ再生', signage_talk: 'サイネージ会話', premium_activate: 'プレミアム有効化'
+  signage_play: 'サイネージ再生', signage_talk: 'サイネージ会話', premium_activate: 'プレミアム有効化',
+  survey_complete: 'アンケート回答', quiz_play: 'クイズ（ゲーム終了）', signage_contract: 'サイネージ新規契約', lp_cta: 'LPのボタン'
 };
 
 const rid = () => Math.random().toString(36).slice(2, 10);
@@ -54,8 +71,10 @@ export default function AdminPage() {
 
   useEffect(() => {
     if (!token) return;
-    api('/api/admin/config').then(d => { setCfg(d); setDirty(false); }).catch(e => setMsg(e.message));
+    api('/api/admin/config').then(d => { setCfg({ ...d, surveys: d.surveys || [] }); setDirty(false); }).catch(e => setMsg(e.message));
   }, [token, api]);
+
+  const reload = () => api('/api/admin/config').then(d => { setCfg({ ...d, surveys: d.surveys || [] }); setDirty(false); setMsg('最新の設定を読み込みました'); }).catch(e => setMsg(e.message));
 
   useEffect(() => {
     const warn = (e: BeforeUnloadEvent) => { if (dirty) { e.preventDefault(); e.returnValue = ''; } };
@@ -70,8 +89,10 @@ export default function AdminPage() {
     setBusy(true);
     setMsg('');
     try {
+      const bad = cfg.surveys.find(sv => sv.active && surveyProblems(sv).length);
+      if (bad) throw new Error(`アンケート「${bad.title || '無題'}」に未入力の項目があります（公開中のものは修正が必要です）`);
       const saved = await api('/api/admin/config', { method: 'PUT', body: JSON.stringify(cfg) });
-      setCfg(c => ({ ...saved, features: c?.features }));
+      setCfg(c => ({ ...saved, rev: saved.rev, features: c?.features }));
       setDirty(false);
       setMsg('保存しました（公開画面への反映は最大1分ほどかかります）');
     } catch (e: any) {
@@ -100,11 +121,12 @@ export default function AdminPage() {
       <header className="ad-head">
         <h1>🔮 管理画面</h1>
         <nav>
-          {([['placements', '🎁 3D掲載枠'], ['partners', '🤝 提携メディア'], ['devices', '📺 サイネージ'], ['premium', '⭐ プレミアム'], ['stats', '📊 集計']] as [Tab, string][]).map(([k, l]) => (
+          {([['placements', '🎁 3D掲載枠'], ['partners', '🤝 提携メディア'], ['devices', '📺 サイネージ'], ['surveys', '📝 サーベイ'], ['premium', '⭐ プレミアム'], ['settings', '⚙️ 料金・ローカル'], ['stats', '📊 集計']] as [Tab, string][]).map(([k, l]) => (
             <button key={k} className={tab === k ? 'is-on' : ''} onClick={() => setTab(k)}>{l}</button>
           ))}
         </nav>
         <div className="ad-save">
+          <button className="ad-sub" onClick={reload} disabled={busy}>↻ 再読み込み</button>
           {tab !== 'stats' && <button onClick={save} disabled={!dirty || busy}>{busy ? '保存中…' : dirty ? '💾 保存する' : '保存済み'}</button>}
           <button className="ad-sub" onClick={() => { sessionStorage.removeItem('ns-admin'); setToken(''); setCfg(null); }}>ログアウト</button>
         </div>
@@ -115,7 +137,9 @@ export default function AdminPage() {
           {tab === 'placements' && <Placements cfg={cfg} update={update} api={api} setMsg={setMsg} />}
           {tab === 'partners' && <Partners cfg={cfg} update={update} origin={origin} />}
           {tab === 'devices' && <Devices cfg={cfg} update={update} origin={origin} />}
+          {tab === 'surveys' && <Surveys cfg={cfg} update={update} api={api} origin={origin} />}
           {tab === 'premium' && <Premium cfg={cfg} update={update} api={api} origin={origin} />}
+          {tab === 'settings' && <SettingsTab cfg={cfg} update={update} api={api} origin={origin} setMsg={setMsg} />}
           {tab === 'stats' && <Stats cfg={cfg} api={api} />}
         </main>
       )}
@@ -256,7 +280,7 @@ function Devices({ cfg, update, origin }: Sub & { origin: string }) {
     <section>
       <div className="ad-intro">
         <p>サイネージ用のURLを端末ごとに発行します。端末キー付きのURLは会話の回数制限がゆるく、同じ地域のローカル枠の情報を会話で案内します。キオスク端末では Chrome を <code>--kiosk --autoplay-policy=no-user-gesture-required</code> で起動し、URL末尾に <code>&amp;autostart=1</code> を付けると無人で再生を始めます。</p>
-        <button onClick={() => update(c => { c.devices.unshift({ id: rid(), name: '', key: crypto.randomUUID().replace(/-/g, ''), active: true }); return c; })}>＋ 端末を追加</button>
+        <button onClick={() => update(c => { c.devices.unshift({ id: rid(), name: '', key: crypto.randomUUID().replace(/-/g, ''), active: true, plan: 'internal', touch: true, mode: 'news' }); return c; })}>＋ 端末を追加</button>
       </div>
       {cfg.devices.map((d, i) => (
         <div key={d.id} className={`ad-card${d.active ? '' : ' is-off'}`}>
@@ -269,8 +293,42 @@ function Devices({ cfg, update, origin }: Sub & { origin: string }) {
             <Field label="設置場所・名前"><input value={d.name} onChange={e => set(i, { name: e.target.value })} placeholder="例：立川駅北口" /></Field>
             <Field label="地域名"><input value={d.region || ''} onChange={e => set(i, { region: e.target.value })} placeholder="例：立川" /></Field>
           </div>
+          <div className="ad-row">
+            <Field label="プラン">
+              <select value={d.plan || 'internal'} onChange={e => set(i, { plan: e.target.value as Device['plan'] })}>
+                <option value="internal">法人・自社（手動契約）</option>
+                <option value="lite">ライト</option>
+                <option value="standard">スタンダード</option>
+              </select>
+            </Field>
+            <Field label="有効期限（空欄＝無期限）" hint={d.stripeSub ? 'Stripe の月額契約は自動で延長されます' : '請求書払いの場合はここで延長'}>
+              <input type="date" value={d.paidUntil || ''} onChange={e => set(i, { paidUntil: e.target.value || undefined })} />
+            </Field>
+            <Field label="表示モード">
+              <select value={d.mode || 'news'} onChange={e => set(i, { mode: e.target.value as Device['mode'] })}>
+                <option value="news">ニュース</option><option value="mix">ミックス</option><option value="survey">アンケート専用</option><option value="quiz">クイズ専用</option>
+              </select>
+            </Field>
+            <Field label="表示するアンケート">
+              <select value={d.surveyId || ''} onChange={e => set(i, { surveyId: e.target.value || undefined })}>
+                <option value="">なし</option>
+                {cfg.surveys.filter(s => !s.owner || s.owner === d.id).map(s => <option key={s.id} value={s.id}>{s.title || '無題'}{s.active ? '' : '（非公開）'}</option>)}
+              </select>
+            </Field>
+          </div>
+          <label className="ad-toggle"><input type="checkbox" checked={d.touch !== false} onChange={e => set(i, { touch: e.target.checked })} /> タッチ操作できる画面</label>
+          <div className="ad-row">
+            <Field label="ローカル収集キーワード"><input value={list(d.localKeywords)} onChange={e => set(i, { localKeywords: e.target.value })} placeholder="立川, 昭島" /></Field>
+            <Field label="追加RSS"><input value={list(d.localFeeds)} onChange={e => set(i, { localFeeds: e.target.value })} placeholder="https://…/rss.xml" /></Field>
+          </div>
+          {d.contact && <p className="ad-small">申込者：{d.contact}{d.stripeSub ? `（Stripe：${d.stripeSub}）` : ''}</p>}
           <Field label="サイネージURL（保存後に有効）">
             <input readOnly value={`${origin}/signage?device=${d.key}&autostart=1`} onFocus={e => e.target.select()} />
+          </Field>
+          <Field label="契約者用の設定URL（お客様に渡す）" hint="お客様がローカルニュース・アンケート・表示モードを自分で変更できます">
+            {d.ownerKey
+              ? <input readOnly value={`${origin}/signage/manage?k=${d.ownerKey}`} onFocus={e => e.target.select()} />
+              : <button onClick={() => set(i, { ownerKey: crypto.randomUUID().replace(/-/g, '') + crypto.randomUUID().replace(/-/g, '').slice(0, 8) })}>設定URLを発行</button>}
           </Field>
         </div>
       ))}
@@ -356,6 +414,118 @@ function Stats({ cfg, api }: { cfg: Config; api: any }) {
         </tbody>
       </table>
       <p className="ad-small">表示回数は1人1回の閲覧ごとに1回と数えます。</p>
+    </section>
+  );
+}
+
+// ---------------- サーベイ ----------------
+function Surveys({ cfg, update, api, origin }: Sub & { api: any; origin: string }) {
+  const [aggs, setAggs] = useState<Record<string, Agg>>({});
+  const [open, setOpen] = useState<string | null>(null);
+  const [code, setCode] = useState('');
+  const [claim, setClaim] = useState<any>(null);
+  const deviceName = (id?: string) => cfg.devices.find(d => d.id === id)?.name || id;
+
+  const showResults = async (id: string) => {
+    setOpen(o => (o === id ? null : id));
+    if (!aggs[id]) setAggs(a => ({ ...a, [id]: { total: 0, q: {} } }));
+    try { const d = await api(`/api/admin/survey/agg?id=${id}`); setAggs(a => ({ ...a, [id]: d })); } catch { /* noop */ }
+  };
+  const checkClaim = async (redeem: boolean) => {
+    try { setClaim(await api(`/api/admin/claim?code=${encodeURIComponent(code.trim().toUpperCase())}`, { method: redeem ? 'POST' : 'GET' })); } catch (e: any) { setClaim({ valid: false, message: e.message }); }
+  };
+
+  return (
+    <section>
+      <div className="ad-intro">
+        <p>タッチで答えるアンケートです（1つ選ぶ・複数・数字評価・マトリクス、条件分岐、回答特典・抽選）。「サイネージ」タブで端末の表示モードを「アンケート専用／ミックス」にして、表示するアンケートを選ぶと約1分で切り替わります。タッチできない端末にはQRコードが出て、スマホで回答できます。</p>
+        <button onClick={() => update(c => { c.surveys.unshift(newSurvey()); return c; })}>＋ アンケートを作る</button>
+      </div>
+      {cfg.surveys.length === 0 && <p className="ad-empty">まだアンケートがありません</p>}
+      {cfg.surveys.map((s, i) => (
+        <div key={s.id}>
+          {s.owner && <p className="ad-small">👤 契約者「{deviceName(s.owner)}」が作成</p>}
+          <SurveyEditor survey={s}
+            onChange={v => update(c => { c.surveys[i] = v; return c; })}
+            onDelete={() => update(c => { c.surveys.splice(i, 1); return c; })} />
+          <div className="ad-row ad-survey-tools">
+            <button className="ad-sub" onClick={() => showResults(s.id)}>{open === s.id ? '集計を閉じる' : '📊 集計を見る'}</button>
+            <input readOnly value={`${origin}/q?s=${s.id}`} onFocus={e => e.target.select()} title="スマホ回答用URL（Web・チラシのQRなど）" />
+          </div>
+          {open === s.id && <div className="ad-card"><SurveyResults survey={s} agg={aggs[s.id] || null} onExport={async () => (await api(`/api/admin/survey/export?id=${s.id}`)).rows} /></div>}
+        </div>
+      ))}
+      <div className="ad-card">
+        <h3>🎟 抽選の引換番号を確認</h3>
+        <div className="ad-row">
+          <input value={code} onChange={e => setCode(e.target.value)} placeholder="例：A1B2C3" maxLength={10} />
+          <button onClick={() => checkClaim(false)} disabled={!code}>確認</button>
+        </div>
+        {claim && (claim.valid ? (
+          <div className={`ad-claim${claim.redeemed ? ' is-used' : ''}`}>
+            <b>{claim.redeemed ? '⚠ 使用済み' : '✅ 有効'}</b> 景品：{claim.prize || '-'}／{new Date(claim.at).toLocaleString('ja-JP')}
+            {!claim.redeemed && <button onClick={() => checkClaim(true)}>引き換え済みにする</button>}
+          </div>
+        ) : <p className="ad-msg">{claim.message || '見つかりません'}</p>)}
+      </div>
+    </section>
+  );
+}
+
+// ---------------- 料金プラン・ローカル収集・クイズ ----------------
+function SettingsTab({ cfg, update, api, origin, setMsg }: Sub & { api: any; origin: string; setMsg: (m: string) => void }) {
+  const plans = cfg.settings.signagePlans || [];
+  const topics = cfg.settings.localTopics || [];
+  const setPlan = (i: number, patch: Partial<Plan>) => update(c => { c.settings.signagePlans![i] = { ...c.settings.signagePlans![i], ...patch }; return c; });
+  const setTopic = (i: number, patch: Partial<Topic>) => update(c => { c.settings.localTopics![i] = { ...c.settings.localTopics![i], ...patch }; return c; });
+  const run = async (path: string, done: string) => {
+    setMsg('実行中…（数十秒かかることがあります）');
+    try { const d = await api(path, { method: 'POST' }); setMsg(`${done}${d.pool !== undefined ? `（クイズの在庫：${d.pool}問）` : ''}`); } catch (e: any) { setMsg(e.message); }
+  };
+  return (
+    <section>
+      <div className="ad-card">
+        <h3>📺 サイネージの料金プラン（LP と申し込みに使用）</h3>
+        <p className="ad-small">
+          Stripe で月額の支払いリンク（Payment Link）をプランごとに作り、「支払い後」のリダイレクト先に
+          <code>{origin}/signage/start?session_id={'{CHECKOUT_SESSION_ID}'}</code> を設定してください。
+          支払いが確認されると専用URLが自動で発行され、月額の継続も自動で確認します（Workers に STRIPE_SECRET_KEY が必要：{cfg.features?.stripe ? '設定済み' : '未設定'}）。
+        </p>
+        {plans.map((p, i) => (
+          <div key={p.id} className="ad-plan">
+            <div className="ad-row">
+              <Field label={`プランID：${p.id}`}><input value={p.name} onChange={e => setPlan(i, { name: e.target.value })} /></Field>
+              <Field label="月額（円・税込）"><input type="number" min={0} value={p.price} onChange={e => setPlan(i, { price: parseInt(e.target.value, 10) || 0 })} /></Field>
+              <Field label="Stripe 支払いリンク"><input value={p.linkUrl || ''} onChange={e => setPlan(i, { linkUrl: e.target.value })} placeholder="https://buy.stripe.com/..." /></Field>
+            </div>
+            <Field label="できること（1行に1つ）"><textarea rows={4} value={Array.isArray(p.features) ? p.features.join('\n') : p.features} onChange={e => setPlan(i, { features: e.target.value })} /></Field>
+            <label className="ad-toggle"><input type="checkbox" checked={!!p.recommended} onChange={e => setPlan(i, { recommended: e.target.checked })} /> おすすめ表示</label>
+          </div>
+        ))}
+      </div>
+
+      <div className="ad-card">
+        <div className="ad-card-head">
+          <span className="ad-type">🔎 地域ごとのローカルニュース収集</span>
+          <button onClick={() => update(c => { c.settings.localTopics = [{ id: rid(), region: '', keywords: [], feeds: [] }, ...(c.settings.localTopics || [])]; return c; })}>＋ 地域を追加</button>
+        </div>
+        <p className="ad-small">キーワードを含むニュースを、配信中の全ジャンルのニュースと追加RSS（市役所・観光協会の新着情報など）から集めます。同じ地域名のサイネージと、メイン画面の <code>/?local=地域名</code> に表示されます。Google ニュース等は規約・robots.txt で収集が禁止されているため使っていません。</p>
+        {topics.map((t, i) => (
+          <div key={t.id} className="ad-row ad-topic">
+            <Field label="地域名"><input value={t.region} onChange={e => setTopic(i, { region: e.target.value })} placeholder="立川" /></Field>
+            <Field label="キーワード（カンマ区切り）"><input value={list(t.keywords)} onChange={e => setTopic(i, { keywords: e.target.value })} placeholder="立川, 昭和記念公園" /></Field>
+            <Field label="追加RSS（カンマ区切り）"><input value={list(t.feeds)} onChange={e => setTopic(i, { feeds: e.target.value })} placeholder="https://…" /></Field>
+            <button className="ad-del" onClick={() => update(c => { c.settings.localTopics!.splice(i, 1); return c; })}>削除</button>
+          </div>
+        ))}
+        <button className="ad-sub" onClick={() => run('/api/admin/local/crawl', 'ローカルニュースを収集しました')}>今すぐ収集する（保存後に実行）</button>
+      </div>
+
+      <div className="ad-card">
+        <h3>🎮 ニュースクイズ</h3>
+        <p className="ad-small">ニュースが更新されるたび（1日2回）に、AIが記事から4択クイズを自動で作ります（最大300問を入れ替え）。足りないときはジャンル当てクイズで補うので、問題が尽きることはありません。</p>
+        <button className="ad-sub" onClick={() => run('/api/admin/quiz/generate', 'クイズを追加しました')}>今すぐクイズを追加する</button>
+      </div>
     </section>
   );
 }

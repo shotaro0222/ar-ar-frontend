@@ -634,3 +634,16 @@ html:has(.lp-root), html:has(.pg-root), body:has(.lp-root), body:has(.pg-root) {
 .ap-form label:not(.ap-check) { display: block; }
 .ap-form label:not(.ap-check) > input, .ap-form label > select, .ap-form label > textarea { display: block; width: 100%; box-sizing: border-box; margin-top: 4px; }
 .ap-form label span { vertical-align: 1px; }
+
+/* トップページのフッター（プライバシーポリシー・お問い合わせ） */
+.ns-foot { flex-shrink: 0; display: flex; justify-content: center; align-items: center; gap: 8px; padding: 6px 12px calc(6px + env(safe-area-inset-bottom));
+  font-size: 11px; color: #64748b; border-top: 1px solid rgba(147,197,253,0.12); background: #0b0f19; }
+.ns-foot a { color: #94a3b8; text-decoration: none; }
+.ns-foot a:hover { color: #e2e8f0; text-decoration: underline; }
+.is-reality .ns-foot { display: none; }
+.pv-doc { line-height: 1.85; font-size: 14px; }
+.pv-doc h2 { font-size: 17px; margin: 28px 0 8px; padding-bottom: 4px; border-bottom: 1px solid #e2e8f0; }
+.pv-doc ul { padding-left: 20px; display: flex; flex-direction: column; gap: 4px; }
+.pv-doc a, .pg-light .pv-lead a { color: #4f46e5; }
+.pv-date { margin-top: 32px; color: #64748b; font-size: 13px; text-align: right; }
+.pv-lead { color: #475569; line-height: 1.8; margin-bottom: 18px; }

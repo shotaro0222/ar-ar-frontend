@@ -854,6 +854,13 @@ export default function HomePage() {
         </div>
       </section>
 
+      {/* フッター（トップページのみ） */}
+      <footer className="ns-foot">
+        <a href="/privacy">プライバシーポリシー</a>
+        <span aria-hidden="true">｜</span>
+        <a href="/contact">お問い合わせ</a>
+      </footer>
+
       {effectOpen && (
         <div className="ns-fx-panel" role="dialog" aria-label="エフェクト">
           <div className="ns-fx-head">

@@ -7,8 +7,8 @@ import { trackEvent } from '../lib/analytics';
 const FORMSPREE_URL = 'https://formspree.io/f/mzedwpap';
 const TOPICS = ['サイネージ導入の相談', '10画面以上・複数拠点', '自治体・観光での活用', '3D広告（スポンサー）掲載', 'XRウィジェット（メディア向け）', 'その他'];
 
-export default function ContactForm() {
-  const [f, setF] = useState({ company: '', name: '', email: '', phone: '', topic: TOPICS[0], message: '', _gotcha: '' });
+export default function ContactForm({ topics = TOPICS, source = 'business', placeholder = '設置場所・画面数・ご希望の開始時期など、わかる範囲でご記入ください' }: { topics?: string[]; source?: string; placeholder?: string }) {
+  const [f, setF] = useState({ company: '', name: '', email: '', phone: '', topic: topics[0], message: '', _gotcha: '' });
   const [state, setState] = useState<'idle' | 'sending' | 'done' | 'error'>('idle');
   const [error, setError] = useState('');
   const set = (patch: Partial<typeof f>) => setF(x => ({ ...x, ...patch }));
@@ -21,14 +21,14 @@ export default function ContactForm() {
       const r = await fetch(FORMSPREE_URL, {
         method: 'POST',
         headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...f, _subject: `【News Summoner】${f.topic}：${f.company || f.name}`, _replyto: f.email, page: 'business' })
+        body: JSON.stringify({ ...f, _subject: `【News Summoner】${f.topic}：${f.company || f.name}`, _replyto: f.email, page: source })
       });
       if (!r.ok) {
         const d = await r.json().catch(() => null);
         throw new Error(d?.errors?.map((x: any) => x.message).join(' / ') || '送信できませんでした');
       }
       setState('done');
-      trackEvent('lp_contact', { from: 'contact_form', topic: f.topic });
+      trackEvent('lp_contact', { from: `contact_form_${source}`, topic: f.topic });
     } catch (err: any) {
       setState('error');
       setError(err.message || '送信できませんでした。時間をおいてお試しください');
@@ -55,9 +55,9 @@ export default function ContactForm() {
         <label>電話番号<input value={f.phone} onChange={e => set({ phone: e.target.value })} autoComplete="tel" inputMode="tel" /></label>
       </div>
       <label>お問い合わせの種類
-        <select value={f.topic} onChange={e => set({ topic: e.target.value })}>{TOPICS.map(t => <option key={t}>{t}</option>)}</select>
+        <select value={f.topic} onChange={e => set({ topic: e.target.value })}>{topics.map(t => <option key={t}>{t}</option>)}</select>
       </label>
-      <label>お問い合わせ内容<span>必須</span><textarea required rows={5} value={f.message} onChange={e => set({ message: e.target.value })} placeholder="設置場所・画面数・ご希望の開始時期など、わかる範囲でご記入ください" /></label>
+      <label>お問い合わせ内容<span>必須</span><textarea required rows={5} value={f.message} onChange={e => set({ message: e.target.value })} placeholder={placeholder} /></label>
       {/* ボット対策（Formspree の _gotcha。人には見えない） */}
       <input className="ap-hp" tabIndex={-1} autoComplete="off" value={f._gotcha} onChange={e => set({ _gotcha: e.target.value })} aria-hidden="true" />
       {state === 'error' && <p className="ap-error">{error}</p>}

@@ -3,6 +3,7 @@
 
 import type { Metadata } from 'next';
 import PlanCards from './PlanCards';
+import ContactForm from './ContactForm';
 import { DEFAULT_PLANS } from '../lib/plans';
 import { SITE_NAME, SITE_URL } from '../lib/site';
 
@@ -69,6 +70,7 @@ export default function BusinessPage() {
           <a href="#usecases">導入例</a>
           <a href="#pricing">料金</a>
           <a href="#faq">よくある質問</a>
+          <a href="#contact">お問い合わせ</a>
           <a className="lp-head-cta" href="#pricing">申し込む</a>
         </nav>
       </header>
@@ -151,6 +153,12 @@ export default function BusinessPage() {
               <details key={f.q}><summary>{f.q}</summary><p>{f.a}</p></details>
             ))}
           </div>
+        </section>
+
+        <section className="lp-section" id="contact">
+          <h2>お問い合わせ</h2>
+          <p className="lp-lead">導入のご相談、複数拠点・自治体でのご利用、3D広告の掲載など、お気軽にお問い合わせください。</p>
+          <ContactForm />
         </section>
 
         <section className="lp-final">

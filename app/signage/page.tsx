@@ -13,6 +13,7 @@ import QuizGame from '../components/QuizGame';
 import { API_BASE, fetchConfig, Placement, track } from '../lib/api';
 import { getRecognition, pickJapaneseVoice, recognitionSupported, splitSentences, startTalk, stopTalk, TalkHolder } from '../lib/speech';
 import { SubmitResult } from '../lib/survey';
+import { getAdminSession } from '../lib/adminSession';
 
 const AVATAR_SRC = '/models/RobotExpressive.glb';
 const ANIM = { idle: 'Idle', talk: 'Yes', wave: 'Wave', think: 'Standing' };
@@ -39,7 +40,11 @@ type State = {
   survey?: any;
   localItems?: { id: string; title: string; description: string; linkUrl?: string }[];
   localNews?: Item[];
+  preview?: boolean;
+  surveys?: { id: string; title: string; active: boolean }[];
+  regions?: string[];
 };
+type Preview = { mode: 'news' | 'survey' | 'quiz' | 'mix'; touch: boolean; survey: string; region: string };
 
 const qr = (data: string, size = 220) => `https://api.qrserver.com/v1/create-qr-code/?size=${size}x${size}&margin=1&data=${encodeURIComponent(data)}`;
 
@@ -47,9 +52,15 @@ function SignageInner() {
   const params = useSearchParams();
   const deviceKey = params.get('device') || '';
   const autostart = params.get('autostart') === '1';
-  const demo = !deviceKey;
+  // 管理者プレビュー：/signage?preview=1（管理画面でログインしていれば、契約なしで全モードを確認できる）
+  const preview = params.get('preview') === '1';
+  const demo = !deviceKey && !preview;
 
   const [started, setStarted] = useState(autostart);
+  const [pv, setPv] = useState<Preview>({ mode: 'mix', touch: true, survey: '', region: '' });
+  const [pvOpen, setPvOpen] = useState(true);
+  const pvRef = useRef(pv);
+  pvRef.current = pv;
   const [state, setState] = useState<State | null>(demo ? { active: true, device: { id: 'demo', name: 'デモ', touch: true, mode: 'news', plan: 'demo' }, features: { survey: false, quiz: true, talk: false } } : null);
   const [slides, setSlides] = useState<Slide[]>([]);
   const [slide, setSlide] = useState<Slide | null>(null);
@@ -97,10 +108,24 @@ function SignageInner() {
   const fetchState = useCallback(async () => {
     if (demo) return;
     try {
-      const d: State = await fetch(`${API_BASE}/api/signage/state?device=${encodeURIComponent(deviceKey)}`).then(r => r.json());
+      let d: State;
+      if (preview) {
+        const token = getAdminSession();
+        if (!token) { setState({ active: false, reason: 'admin' }); return; }
+        const p = pvRef.current;
+        const qs = new URLSearchParams({ mode: p.mode, touch: p.touch ? '1' : '0', survey: p.survey, region: p.region });
+        const r = await fetch(`${API_BASE}/api/signage/preview?${qs}`, { headers: { Authorization: `Bearer ${token}` } });
+        if (r.status === 401) { setState({ active: false, reason: 'admin' }); return; }
+        d = await r.json();
+      } else {
+        d = await fetch(`${API_BASE}/api/signage/state?device=${encodeURIComponent(deviceKey)}`).then(r => r.json());
+      }
       setState(prev => (prev && prev.rev === d.rev && JSON.stringify(prev) === JSON.stringify(d) ? prev : d));
     } catch { /* 通信が戻ったら再取得 */ }
-  }, [demo, deviceKey]);
+  }, [demo, deviceKey, preview]);
+
+  // プレビューの設定を変えたらすぐ取り直す
+  useEffect(() => { if (preview) fetchState(); }, [pv, preview, fetchState]);
 
   useEffect(() => {
     setOrigin(window.location.origin);
@@ -196,12 +221,12 @@ function SignageInner() {
     if (s.kind === 'news') {
       const ss = splitSentences(s.item.summary || '');
       setSentences(ss);
-      track('signage_play', stateRef.current?.device?.id || 'demo');
+      if (!stateRef.current?.preview) track('signage_play', stateRef.current?.device?.id || 'demo');
       say([{ text: `${LABELS[s.cat] || s.cat}のニュースです。${s.item.title}。`, seg: -1 }, ...ss.map((text, i) => ({ text, seg: i }))], next);
     } else if (s.kind === 'placement') {
       const ss = splitSentences(s.p.description);
       setSentences(ss);
-      track(s.p.type === 'sponsor' ? 'sponsor_impression' : 'local_impression', s.p.id, false);
+      if (!stateRef.current?.preview) track(s.p.type === 'sponsor' ? 'sponsor_impression' : 'local_impression', s.p.id, false);
       const intro = s.p.type === 'sponsor' ? `ここで、${s.p.sponsor}からのお知らせです。` : `${s.p.region || ''}の見どころ、${s.p.title}をご紹介します。`;
       say([{ text: intro, seg: -1 }, ...ss.map((text, i) => ({ text, seg: i }))], () => { loopTimer.current = setTimeout(next, 6000); });
     } else {
@@ -353,8 +378,9 @@ function SignageInner() {
       <div className="sg-root sg-blocked">
         <div>
           <div className="sg-logo">🔮 News Summoner</div>
-          <h1>{state.reason === 'expired' ? 'ご契約の有効期限が切れています' : 'このサイネージURLは無効です'}</h1>
-          <p>{state.reason === 'expired' ? 'お支払い（お振込み）を確認でき次第、表示を再開します。' : '管理画面で発行されたURLをご確認ください。'}</p>
+          <h1>{state.reason === 'admin' ? '管理者としてログインしてください' : state.reason === 'expired' ? 'ご契約の有効期限が切れています' : 'このサイネージURLは無効です'}</h1>
+          {state.reason === 'admin' && <p><a className="sg-btn sg-btn-sub" href="/admin">管理画面でログインする</a></p>}
+          <p>{state.reason === 'admin' ? 'プレビューは管理者だけが使えます。ログイン後にこのページを再読み込みしてください。' : state.reason === 'expired' ? 'お支払い（お振込み）を確認でき次第、表示を再開します。' : '管理画面で発行されたURLをご確認ください。'}</p>
         </div>
       </div>
     );
@@ -500,10 +526,10 @@ function SignageInner() {
   }
 
   return (
-    <div className={`sg-root${touch ? '' : ' sg-notouch'}`} onClick={() => !started && setStarted(true)}>
+    <div className={`sg-root${touch ? '' : ' sg-notouch'}${preview ? ' sg-preview' : ''}`} onClick={() => !started && setStarted(true)}>
       <Script type="module" src="https://ajax.googleapis.com/ajax/libs/model-viewer/3.4.0/model-viewer.min.js" />
       <header className="sg-head">
-        <div className="sg-logo">🔮 News Summoner{demo && <small className="sg-demo">デモ表示</small>}</div>
+        <div className="sg-logo">🔮 News Summoner{demo && <small className="sg-demo">デモ表示</small>}{preview && <small className="sg-demo">管理者プレビュー</small>}</div>
         <div className="sg-head-right">
           {(overlay === 'survey' || overlay === 'quiz') && <button className="sg-btn sg-btn-sub" onClick={closeOverlay}>✕ 閉じる</button>}
           <div className="sg-clock">
@@ -513,6 +539,35 @@ function SignageInner() {
         </div>
       </header>
       <main className="sg-main">{stage}{panel}</main>
+      {preview && (
+        <div className={`sg-pv${pvOpen ? '' : ' is-closed'}`} onClick={e => e.stopPropagation()}>
+          <button className="sg-pv-toggle" onClick={() => setPvOpen(o => !o)}>{pvOpen ? '× 閉じる' : '⚙ プレビュー設定'}</button>
+          {pvOpen && (
+            <>
+              <b>👑 管理者プレビュー</b>
+              <label>表示モード
+                <select value={pv.mode} onChange={e => setPv(p => ({ ...p, mode: e.target.value as Preview['mode'] }))}>
+                  <option value="news">ニュース</option><option value="mix">ミックス</option><option value="survey">アンケート専用</option><option value="quiz">クイズ専用</option>
+                </select>
+              </label>
+              <label className="sg-pv-check"><input type="checkbox" checked={pv.touch} onChange={e => setPv(p => ({ ...p, touch: e.target.checked }))} /> タッチ操作できる画面</label>
+              <label>アンケート
+                <select value={pv.survey} onChange={e => setPv(p => ({ ...p, survey: e.target.value }))}>
+                  <option value="">（公開中の最初のもの）</option>
+                  {(state?.surveys || []).map(s => <option key={s.id} value={s.id}>{s.title}{s.active ? '' : '（非公開）'}</option>)}
+                </select>
+              </label>
+              <label>地域（ローカルニュース）
+                <select value={pv.region} onChange={e => setPv(p => ({ ...p, region: e.target.value }))}>
+                  <option value="">すべて</option>
+                  {(state?.regions || []).map(r => <option key={r} value={r}>{r}</option>)}
+                </select>
+              </label>
+              <small>このプレビューは集計・課金の対象外です</small>
+            </>
+          )}
+        </div>
+      )}
       {!started && (
         <div className="sg-start">
           <div>🔮</div>

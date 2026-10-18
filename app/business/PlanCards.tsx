@@ -48,9 +48,7 @@ export default function PlanCards() {
       </div>
       <p className="lp-note">初期費用0円・最低契約期間なし（月単位でいつでも解約できます）。{mode === 'stripe' ? 'お支払いはStripeの安全な決済ページで行います。' : 'お支払いは銀行振込（請求書払い）です。ご入金確認後に専用URLをお送りします。'}</p>
       {applying && <ApplyForm plans={plans} initialPlan={applying} onClose={() => setApplying(null)} />}
-      {contact && (
-        <p className="lp-note">10画面以上・自治体・請求書払いのご相談は <a href={contact} target="_blank" rel="noreferrer" onClick={() => trackEvent('lp_contact', { from: 'pricing' })}>こちら</a></p>
-      )}
+      <p className="lp-note">10画面以上・自治体・まとめ払いのご相談は <a href="#contact" onClick={() => trackEvent('lp_contact_click', { from: 'pricing' })}>お問い合わせフォーム</a> から</p>
     </>
   );
 }

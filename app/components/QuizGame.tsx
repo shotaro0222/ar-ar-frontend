@@ -19,6 +19,28 @@ type Props = {
   onSpeak?: (text: string) => void; // サイネージでアバターに読ませる
 };
 
+const CAT_LABELS: Record<string, string> = {
+  it: 'IT', business: 'ビジネス', entertainment: 'エンタメ', funny: 'オモシロ', politics: '政治', society: '社会',
+  world: '国際', sports: 'スポーツ', science: '科学', lifestyle: '暮らし'
+};
+const shuffle = <T,>(a: T[]) => { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
+
+// クイズAPIが使えないとき用：ニュース一覧から「このニュースはどのジャンル？」を作る
+async function fallbackQuizzes(n: number): Promise<Quiz[]> {
+  const news = await fetch(`${API_BASE}/api/news`).then(r => r.json());
+  const cats = Object.keys(news || {}).filter(k => CAT_LABELS[k] && Array.isArray(news[k]) && news[k].length);
+  if (cats.length < 2) return [];
+  const out: Quiz[] = [];
+  for (let i = 0; i < n; i++) {
+    const cat = cats[Math.floor(Math.random() * cats.length)];
+    const item = news[cat][Math.floor(Math.random() * news[cat].length)];
+    const others = shuffle(Object.keys(CAT_LABELS).filter(c => c !== cat)).slice(0, 3);
+    const choices = shuffle([cat, ...others]).map(c => CAT_LABELS[c]);
+    out.push({ q: `このニュースはどのジャンル？「${item.title}」`, choices, answer: choices.indexOf(CAT_LABELS[cat]), source: item.source, url: item.url, kind: 'category' });
+  }
+  return out;
+}
+
 const KIOSK_NAMES = ['ねこ🐱', 'いぬ🐶', 'うさぎ🐰', 'ぱんだ🐼', 'ぺんぎん🐧', 'くま🐻', 'きつね🦊', 'とら🐯'];
 const LEVEL_UP = 5;
 
@@ -37,6 +59,8 @@ export default function QuizGame({ scope, mode, big, kiosk, onSpeak }: Props) {
   const [rank, setRank] = useState<number | null>(null);
   const [gain, setGain] = useState(0);
   const loading = useRef(false);
+  const [loadFailed, setLoadFailed] = useState(false);
+  const waitTries = useRef(0);
   const queueRef = useRef<Quiz[]>([]);
   queueRef.current = queue;
 
@@ -46,10 +70,16 @@ export default function QuizGame({ scope, mode, big, kiosk, onSpeak }: Props) {
   const refill = useCallback(async () => {
     if (loading.current) return;
     loading.current = true;
+    let list: Quiz[] = [];
     try {
-      const d = await fetch(`${API_BASE}/api/quiz?n=15`).then(r => r.json());
-      setQueue(q => [...q, ...(d.quizzes || [])]);
-    } catch { /* 次の機会に */ } finally { loading.current = false; }
+      const r = await fetch(`${API_BASE}/api/quiz?n=15`);
+      if (r.ok) list = ((await r.json()).quizzes || []).filter((x: Quiz) => x?.q && x.choices?.length === 4);
+    } catch { /* 下の代わりの問題で補う */ }
+    if (!list.length) {
+      try { list = await fallbackQuizzes(15); } catch { /* 通信できない */ }
+    }
+    if (list.length) { setQueue(q => [...q, ...list]); setLoadFailed(false); } else setLoadFailed(true);
+    loading.current = false;
   }, []);
 
   const loadTop = useCallback(() => {
@@ -61,7 +91,14 @@ export default function QuizGame({ scope, mode, big, kiosk, onSpeak }: Props) {
 
   const nextQuestion = useCallback(() => {
     const [q, ...rest] = queueRef.current;
-    if (!q) { setCur(null); refill(); setTimeout(() => nextRef.current(), 1500); return; }
+    if (!q) {
+      // 問題がまだ届いていない：読み込み中を表示して待つ（10回=約15秒であきらめてエラー表示）
+      setCur(null);
+      setPhase('question');
+      if (waitTries.current++ < 10) { refill(); setTimeout(() => nextRef.current(), 1500); } else setLoadFailed(true);
+      return;
+    }
+    waitTries.current = 0;
     setQueue(rest);
     setCur(q);
     setPicked(null);
@@ -113,6 +150,8 @@ export default function QuizGame({ scope, mode, big, kiosk, onSpeak }: Props) {
 
   const start = () => {
     setScore(0); setLives(3); setStreak(0); setCorrect(0); setRank(null);
+    setLoadFailed(false);
+    waitTries.current = 0;
     trackEvent('quiz_start', { scope });
     nextQuestion();
   };
@@ -175,7 +214,20 @@ export default function QuizGame({ scope, mode, big, kiosk, onSpeak }: Props) {
     );
   }
 
-  if (!cur) return <div className={cls}><div className="qz-title"><p>問題を準備しています…</p></div></div>;
+  if (!cur) {
+    return (
+      <div className={cls}>
+        <div className="qz-title">
+          {loadFailed ? (
+            <>
+              <p>問題を読み込めませんでした。通信状態を確認してください。</p>
+              <button className="qz-btn" onClick={() => { setLoadFailed(false); waitTries.current = 0; refill(); setTimeout(() => nextRef.current(), 800); }}>もう一度読み込む</button>
+            </>
+          ) : <p>問題を準備しています…</p>}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className={cls}>

@@ -48,6 +48,40 @@ type Preview = { mode: 'news' | 'survey' | 'quiz' | 'mix'; touch: boolean; surve
 
 const qr = (data: string, size = 220) => `https://api.qrserver.com/v1/create-qr-code/?size=${size}x${size}&margin=1&data=${encodeURIComponent(data)}`;
 
+// 管理者プレビューの状態を作る。既存の管理API（/api/admin/config）だけで組み立てるので、
+// サーバーの新しいプレビューAPIがまだデプロイされていなくても表示できる
+async function buildPreviewState(token: string, p: Preview): Promise<State> {
+  const r = await fetch(`${API_BASE}/api/admin/config`, { headers: { Authorization: `Bearer ${token}` } });
+  if (r.status === 401) return { active: false, reason: 'admin' };
+  if (!r.ok) throw new Error(`config ${r.status}`);
+  const cfg = await r.json();
+  const surveys: any[] = Array.isArray(cfg.surveys) ? cfg.surveys : [];
+  const picked = surveys.find(s => s.id === p.survey) || surveys.find(s => s.active) || surveys[0] || null;
+  // 回答者に見せない情報（クーポンコード・当選確率）は外す
+  const survey = picked ? { ...picked, incentive: { type: picked.incentive?.type || 'none', text: picked.incentive?.text } } : null;
+  const regions = [...new Set([
+    ...((cfg.settings?.localTopics || []) as any[]).map(t => t.region),
+    ...((cfg.devices || []) as any[]).map(d => d.region)
+  ].filter(Boolean))] as string[];
+  let localNews: Item[] = [];
+  try {
+    const lr = await fetch(`${API_BASE}/api/local?region=${encodeURIComponent(p.region)}`);
+    if (lr.ok) localNews = ((await lr.json()).items || []) as Item[];
+  } catch { /* ローカル収集APIが未デプロイなら空のまま */ }
+  return {
+    active: true,
+    preview: true,
+    rev: `${cfg.rev || ''}|${p.mode}|${p.touch}|${survey?.id || ''}|${p.region}`,
+    device: { id: 'preview', name: '管理者プレビュー', region: p.region || undefined, touch: p.touch, mode: p.mode, plan: 'internal' },
+    features: { survey: true, quiz: true, talk: true },
+    survey,
+    surveys: surveys.map(s => ({ id: s.id, title: s.title, active: !!s.active })),
+    regions,
+    localItems: [],
+    localNews
+  };
+}
+
 function SignageInner() {
   const params = useSearchParams();
   const deviceKey = params.get('device') || '';
@@ -112,11 +146,7 @@ function SignageInner() {
       if (preview) {
         const token = getAdminSession();
         if (!token) { setState({ active: false, reason: 'admin' }); return; }
-        const p = pvRef.current;
-        const qs = new URLSearchParams({ mode: p.mode, touch: p.touch ? '1' : '0', survey: p.survey, region: p.region });
-        const r = await fetch(`${API_BASE}/api/signage/preview?${qs}`, { headers: { Authorization: `Bearer ${token}` } });
-        if (r.status === 401) { setState({ active: false, reason: 'admin' }); return; }
-        d = await r.json();
+        d = await buildPreviewState(token, pvRef.current);
       } else {
         d = await fetch(`${API_BASE}/api/signage/state?device=${encodeURIComponent(deviceKey)}`).then(r => r.json());
       }
@@ -255,6 +285,9 @@ function SignageInner() {
       const text = `${survey.title}。${touch ? '画面をタッチして' : 'QRコードを読み取って'}ご協力ください。`;
       setSentences([text]);
       say([{ text, seg: 0 }], () => {});
+    } else if (started && stateRef.current?.active && (mode === 'news' || mode === 'mix')) {
+      // ニュース／ミックスに切り替わったら、読み上げを最初から再開する
+      loopTimer.current = setTimeout(() => { loopTimer.current = null; playNext(); }, 400);
     }
   }, [mode, survey?.id, started]); // eslint-disable-line react-hooks/exhaustive-deps
 

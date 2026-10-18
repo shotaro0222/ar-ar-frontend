@@ -66,9 +66,6 @@ const list = (v: string[] | string | undefined) => (Array.isArray(v) ? v.join(',
 export default function AdminPage() {
   const [token, setToken] = useState('');
   const [input, setInput] = useState('');
-  const [email, setEmail] = useState('');
-  const [me, setMe] = useState('');
-  const [loggingIn, setLoggingIn] = useState(false);
   const [cfg, setCfg] = useState<Config | null>(null);
   const [tab, setTab] = useState<Tab>('applications');
   const [msg, setMsg] = useState('');
@@ -79,7 +76,7 @@ export default function AdminPage() {
   const api = useCallback(async (path: string, init: RequestInit = {}) => {
     const res = await fetch(`${API_BASE}${path}`, { ...init, headers: { ...(init.headers || {}), Authorization: `Bearer ${token}` } });
     const d = await res.json().catch(() => ({}));
-    if (res.status === 401) { setToken(''); clearAdminSession(); throw new Error('ログインの有効期限が切れました。もう一度ログインしてください'); }
+    if (res.status === 401) { setToken(''); clearAdminSession(); throw new Error('パスワードが違います。もう一度ログインしてください'); }
     if (!res.ok) throw new Error(d?.error || `エラー（${res.status}）`);
     return d;
   }, [token]);
@@ -92,7 +89,6 @@ export default function AdminPage() {
 
   useEffect(() => {
     if (!token) return;
-    api('/api/admin/me').then((d: any) => setMe(d.email || '')).catch(() => {});
     api('/api/admin/config').then(d => { setCfg({ ...d, surveys: d.surveys || [] }); setDirty(false); }).catch(e => setMsg(e.message));
   }, [token, api]);
 
@@ -128,28 +124,10 @@ export default function AdminPage() {
     return (
       <div className="ad-root ad-login">
         <h1>🔮 News Summoner 管理画面</h1>
-        <form className="ad-login-form" onSubmit={async e => {
-          e.preventDefault();
-          setLoggingIn(true);
-          setMsg('');
-          try {
-            const r = await fetch(`${API_BASE}/api/admin/login`, { method: 'POST', body: JSON.stringify({ email, password: input }) });
-            const d = await r.json().catch(() => ({}));
-            if (!r.ok || !d.token) throw new Error(d?.error || 'ログインできませんでした');
-            setAdminSession(d.token);
-            setToken(d.token);
-            setInput('');
-          } catch (err: any) {
-            setMsg(err.message);
-          } finally {
-            setLoggingIn(false);
-          }
-        }}>
-          <input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="管理者メールアドレス" autoComplete="username" required />
-          <input type="password" value={input} onChange={e => setInput(e.target.value)} placeholder="パスワード" autoComplete="current-password" required />
-          <button type="submit" disabled={!input || !email || loggingIn}>{loggingIn ? 'ログイン中…' : 'ログイン'}</button>
+        <form className="ad-login-form" onSubmit={e => { e.preventDefault(); setAdminSession(input); setToken(input); setInput(''); }}>
+          <input type="password" value={input} onChange={e => setInput(e.target.value)} placeholder="パスワード（ADMIN_TOKEN）" autoComplete="current-password" required />
+          <button type="submit" disabled={!input}>ログイン</button>
         </form>
-        <p className="ad-small">パスワードは Workers に設定した ADMIN_TOKEN です。ログインは30日間保持されます。</p>
         {msg && <p className="ad-msg">{msg}</p>}
       </div>
     );
@@ -169,7 +147,7 @@ export default function AdminPage() {
           <button className="ad-sub" onClick={reload} disabled={busy}>↻ 再読み込み</button>
           {tab !== 'stats' && <button onClick={save} disabled={!dirty || busy}>{busy ? '保存中…' : dirty ? '💾 保存する' : '保存済み'}</button>}
           <a className="ad-preview-btn" href="/signage?preview=1" target="_blank" rel="noreferrer">📺 サイネージをプレビュー</a>
-          <button className="ad-sub" onClick={() => { clearAdminSession(); setToken(''); setCfg(null); }} title={me}>ログアウト</button>
+          <button className="ad-sub" onClick={() => { clearAdminSession(); setToken(''); setCfg(null); }}>ログアウト</button>
         </div>
       </header>
       {msg && <p className="ad-msg" onClick={() => setMsg('')}>{msg}</p>}

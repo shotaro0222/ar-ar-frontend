@@ -5,7 +5,7 @@ import Script from 'next/script';
 import AskSheet, { ChatTurn } from './components/AskSheet';
 import EffectLayer, { EFFECTS, EffectKind, MAGIC_COLORS } from './components/EffectLayer';
 import PremiumSheet from './components/PremiumSheet';
-import { pickJapaneseVoice, splitSentences, startTalk, stopTalk, TalkHolder } from './lib/speech';
+import { pickJapaneseVoice, silenceVoice, splitSentences, startTalk, stopTalk, TalkHolder } from './lib/speech';
 import { API_BASE, checkPremium, claimStripe, EMPTY_CONFIG, fetchConfig, Placement, PremiumState, PublicConfig, sponsorFor, track } from './lib/api';
 import { capturePhoto } from './lib/photo';
 import { trackEvent } from './lib/analytics';
@@ -393,7 +393,7 @@ export default function HomePage() {
   const toggleMute = () => {
     const next = !muted;
     setMuted(next);
-    if (next) window.speechSynthesis?.cancel();
+    if (next) silenceVoice();
     try { localStorage.setItem('ns-muted', next ? '1' : '0'); } catch { /* noop */ }
   };
 

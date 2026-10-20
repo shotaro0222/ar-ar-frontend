@@ -3,7 +3,7 @@
 // 管理画面：掲載枠（スポンサー／ローカル）・提携メディア・サイネージ端末・プレミアム・集計
 // ログインには Workers に設定した ADMIN_TOKEN を使う（ブラウザのタブを閉じると消える）
 
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import Script from 'next/script';
 import { API_BASE } from '../lib/api';
 import { clearAdminSession, getAdminSession, setAdminSession } from '../lib/adminSession';
@@ -29,6 +29,7 @@ type Settings = {
   premiumEnabled: boolean; premiumLinkUrl?: string; premiumPrice?: string; premiumDays?: number; contactUrl?: string;
   signagePlans?: Plan[]; localTopics?: Topic[];
   paymentMode?: 'bank' | 'stripe'; bankInfo?: string; applyNotifyUrl?: string; invoiceNote?: string;
+  ttsEnabled?: boolean; ttsVoiceId?: string; ttsModel?: string; ttsMonthlyLimit?: number;
 };
 type Application = {
   id: string; createdAt: string; status: 'new' | 'invoiced' | 'active' | 'cancelled'; plan: string; screens: number;
@@ -139,7 +140,7 @@ export default function AdminPage() {
       <header className="ad-head">
         <h1>🔮 管理画面</h1>
         <nav>
-          {([['applications', '📥 申し込み'], ['placements', '🎁 3D掲載枠'], ['partners', '🤝 提携メディア'], ['devices', '📺 サイネージ'], ['surveys', '📝 サーベイ'], ['premium', '⭐ プレミアム'], ['settings', '⚙️ 料金・ローカル'], ['stats', '📊 集計']] as [Tab, string][]).map(([k, l]) => (
+          {([['applications', '📥 申し込み'], ['placements', '🎁 3D掲載枠'], ['partners', '🤝 提携メディア'], ['devices', '📺 サイネージ'], ['surveys', '📝 サーベイ'], ['premium', '⭐ プレミアム'], ['settings', '⚙️ 音声・料金・ローカル'], ['stats', '📊 集計']] as [Tab, string][]).map(([k, l]) => (
             <button key={k} className={tab === k ? 'is-on' : ''} onClick={() => setTab(k)}>{l}</button>
           ))}
         </nav>
@@ -158,7 +159,7 @@ export default function AdminPage() {
           {tab === 'devices' && <Devices cfg={cfg} update={update} origin={origin} />}
           {tab === 'surveys' && <Surveys cfg={cfg} update={update} api={api} origin={origin} />}
           {tab === 'premium' && <Premium cfg={cfg} update={update} api={api} origin={origin} />}
-          {tab === 'settings' && <SettingsTab cfg={cfg} update={update} api={api} origin={origin} setMsg={setMsg} />}
+          {tab === 'settings' && <SettingsTab cfg={cfg} update={update} api={api} origin={origin} setMsg={setMsg} token={token} />}
           {tab === 'stats' && <Stats cfg={cfg} api={api} />}
           {tab === 'applications' && <Applications cfg={cfg} api={api} origin={origin} setMsg={setMsg} dirty={dirty} reload={reload} goDevices={() => setTab('devices')} />}
         </main>
@@ -601,8 +602,100 @@ function Surveys({ cfg, update, api, origin }: Sub & { api: any; origin: string 
   );
 }
 
+// ---------------- 読み上げ音声（ElevenLabs） ----------------
+type TtsInfo = {
+  configured: boolean; enabled?: boolean; models?: string[]; voicesError?: string; usedThisMonth?: number;
+  voices?: { id: string; name: string; category?: string; labels?: Record<string, string>; preview?: string }[];
+  subscription?: { tier?: string; count?: number; limit?: number; resetAt?: number } | null;
+};
+const MODEL_LABELS: Record<string, string> = {
+  eleven_flash_v2_5: 'Flash v2.5（速い・安い／おすすめ）',
+  eleven_turbo_v2_5: 'Turbo v2.5（速い）',
+  eleven_multilingual_v2: 'Multilingual v2（高品質・やや遅い）',
+  eleven_v3: 'v3（最も表情豊か・遅い）'
+};
+
+function VoiceCard({ cfg, update, api, token }: Sub & { api: any; token: string }) {
+  const s = cfg.settings;
+  const [info, setInfo] = useState<TtsInfo | null>(null);
+  const [err, setErr] = useState('');
+  const [testing, setTesting] = useState(false);
+  const [sample, setSample] = useState('こんにちは。ニュースサモナーです。今日の気になるニュースをお伝えします。');
+  const audio = useRef<HTMLAudioElement | null>(null);
+
+  useEffect(() => { api('/api/admin/tts').then(setInfo).catch((e: any) => setErr(e.message)); }, [api]);
+
+  const test = async () => {
+    setTesting(true); setErr('');
+    try {
+      const r = await fetch(`${API_BASE}/api/admin/tts/test`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ text: sample, voiceId: s.ttsVoiceId || '', model: s.ttsModel || '' })
+      });
+      if (!r.ok) throw new Error((await r.json().catch(() => ({})))?.error || `エラー（${r.status}）`);
+      const url = URL.createObjectURL(await r.blob());
+      audio.current?.pause();
+      audio.current = new Audio(url);
+      await audio.current.play();
+    } catch (e: any) { setErr(`試聴できませんでした：${e.message}`); }
+    finally { setTesting(false); }
+  };
+
+  const sub = info?.subscription;
+  return (
+    <div className="ad-card">
+      <h3>🗣️ 読み上げ音声（ElevenLabs）</h3>
+      {!info && !err && <p className="ad-small">読み込み中…</p>}
+      {info && !info.configured && (
+        <p className="ad-small">
+          ElevenLabs の API キーが未設定のため、ブラウザの音声で読み上げています。
+          <a href="https://elevenlabs.io/app/developers/api-keys" target="_blank" rel="noreferrer">API キーを発行</a>し、
+          バックエンドで <code>npx wrangler secret put ELEVENLABS_API_KEY</code> を実行すると、ここで声を選べるようになります。
+        </p>
+      )}
+      {info?.configured && (
+        <>
+          <label className="ad-toggle"><input type="checkbox" checked={s.ttsEnabled !== false} onChange={e => update(c => { c.settings.ttsEnabled = e.target.checked; return c; })} /> ElevenLabs の声で読み上げる（オフにするとブラウザの音声）</label>
+          <div className="ad-row">
+            <Field label="声" hint={info.voicesError ? `声の一覧を取得できませんでした（${info.voicesError}）。API キーに「Voices：読み取り」の権限があるか確認してください` : '未選択のときはアカウントの最初の声を使います。声は ElevenLabs の Voice Library でマイボイスに追加すると一覧に出ます'}>
+              <select value={s.ttsVoiceId || ''} onChange={e => update(c => { c.settings.ttsVoiceId = e.target.value; return c; })}>
+                <option value="">（自動）</option>
+                {(info.voices || []).map(v => (
+                  <option key={v.id} value={v.id}>{v.name}{v.labels?.language ? `（${v.labels.language}）` : ''}{v.labels?.gender ? ` ${v.labels.gender}` : ''}</option>
+                ))}
+                {s.ttsVoiceId && !(info.voices || []).some(v => v.id === s.ttsVoiceId) && <option value={s.ttsVoiceId}>{s.ttsVoiceId}</option>}
+              </select>
+            </Field>
+            <Field label="モデル">
+              <select value={s.ttsModel || 'eleven_flash_v2_5'} onChange={e => update(c => { c.settings.ttsModel = e.target.value; return c; })}>
+                {(info.models || Object.keys(MODEL_LABELS)).map(m => <option key={m} value={m}>{MODEL_LABELS[m] || m}</option>)}
+              </select>
+            </Field>
+            <Field label="1か月の生成上限（文字数・0で上限なし）" hint="同じ文章は保存した音声を使い回すので、文字数を消費するのは新しい文章だけです">
+              <input type="number" min={0} step={1000} value={s.ttsMonthlyLimit || 0} onChange={e => update(c => { c.settings.ttsMonthlyLimit = Math.max(0, parseInt(e.target.value, 10) || 0); return c; })} />
+            </Field>
+          </div>
+          <Field label="試聴する文章（保存前の声・モデルで試せます）">
+            <input value={sample} onChange={e => setSample(e.target.value)} />
+          </Field>
+          <button className="ad-sub" onClick={test} disabled={testing}>{testing ? '生成中…' : '▶ 試聴する'}</button>
+          <p className="ad-small">
+            今月このサイトで生成：{(info.usedThisMonth || 0).toLocaleString()}文字
+            {s.ttsMonthlyLimit ? ` ／ 上限 ${s.ttsMonthlyLimit.toLocaleString()}文字` : ''}
+            {sub?.limit ? `　｜　ElevenLabs（${sub.tier || 'プラン'}）：${(sub.count || 0).toLocaleString()} / ${sub.limit.toLocaleString()}文字` : ''}
+            {sub?.resetAt ? `（${new Date(sub.resetAt * 1000).toLocaleDateString('ja-JP')} にリセット）` : ''}
+            。上限に達したときや通信できないときは、自動でブラウザの音声に切り替わります。
+          </p>
+        </>
+      )}
+      {err && <p className="ad-msg">{err}</p>}
+    </div>
+  );
+}
+
 // ---------------- 料金プラン・ローカル収集・クイズ ----------------
-function SettingsTab({ cfg, update, api, origin, setMsg }: Sub & { api: any; origin: string; setMsg: (m: string) => void }) {
+function SettingsTab({ cfg, update, api, origin, setMsg, token }: Sub & { api: any; origin: string; setMsg: (m: string) => void; token: string }) {
   const plans = cfg.settings.signagePlans || [];
   const topics = cfg.settings.localTopics || [];
   const setPlan = (i: number, patch: Partial<Plan>) => update(c => { c.settings.signagePlans![i] = { ...c.settings.signagePlans![i], ...patch }; return c; });
@@ -613,6 +706,8 @@ function SettingsTab({ cfg, update, api, origin, setMsg }: Sub & { api: any; ori
   };
   return (
     <section>
+      <VoiceCard cfg={cfg} update={update} api={api} token={token} />
+
       <div className="ad-card">
         <h3>💴 お支払い方法</h3>
         <div className="ad-row">

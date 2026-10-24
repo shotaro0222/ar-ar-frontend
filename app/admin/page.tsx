@@ -9,7 +9,7 @@ import { API_BASE } from '../lib/api';
 import { clearAdminSession, getAdminSession, setAdminSession } from '../lib/adminSession';
 import SurveyEditor from '../components/SurveyEditor';
 import SurveyResults from '../components/SurveyResults';
-import { Agg, newSurvey, Survey, surveyProblems } from '../lib/survey';
+import { Agg, Client, newSurvey, Survey, surveyProblems } from '../lib/survey';
 
 type Placement = {
   id: string; type: 'sponsor' | 'local'; active: boolean; title: string; sponsor: string; description: string;
@@ -48,7 +48,7 @@ function addMonths(d: string, n: number) {
 }
 const daysLeft = (d?: string) => (d ? Math.round((Date.parse(d) - Date.parse(todayStr())) / 86400_000) : Infinity);
 type Config = {
-  placements: Placement[]; partners: Partner[]; devices: Device[]; settings: Settings; surveys: Survey[]; rev?: string;
+  placements: Placement[]; partners: Partner[]; devices: Device[]; settings: Settings; surveys: Survey[]; clients?: Client[]; rev?: string;
   features?: { stats: boolean; assets: boolean; stripe: boolean };
 };
 type Tab = 'applications' | 'placements' | 'partners' | 'devices' | 'surveys' | 'premium' | 'settings' | 'stats';
@@ -561,6 +561,12 @@ function Surveys({ cfg, update, api, origin }: Sub & { api: any; origin: string 
     if (!aggs[id]) setAggs(a => ({ ...a, [id]: { total: 0, q: {} } }));
     try { const d = await api(`/api/admin/survey/agg?id=${id}`); setAggs(a => ({ ...a, [id]: d })); } catch { /* noop */ }
   };
+  const clients = cfg.clients || [];
+  const reportUrl = (c: Client) => (c.reportKey ? `${origin}/report?k=${c.reportKey}` : '');
+  const setClient = (i: number, patch: Partial<Client>) => update(c => { c.clients![i] = { ...c.clients![i], ...patch }; return c; });
+  const reagg = async (id: string) => {
+    try { const d = await api(`/api/admin/survey/reagg?id=${id}`, { method: 'POST' }); setAggs(a => ({ ...a, [id]: d })); } catch (e: any) { alert(e.message); }
+  };
   const checkClaim = async (redeem: boolean) => {
     try { setClaim(await api(`/api/admin/claim?code=${encodeURIComponent(code.trim().toUpperCase())}`, { method: redeem ? 'POST' : 'GET' })); } catch (e: any) { setClaim({ valid: false, message: e.message }); }
   };
@@ -571,6 +577,43 @@ function Surveys({ cfg, update, api, origin }: Sub & { api: any; origin: string 
         <p>タッチで答えるアンケートです（1つ選ぶ・複数・数字評価・マトリクス、条件分岐、回答特典・抽選）。「サイネージ」タブで端末の表示モードを「アンケート専用／ミックス」にして、表示するアンケートを選ぶと約1分で切り替わります。タッチできない端末にはQRコードが出て、スマホで回答できます。</p>
         <button onClick={() => update(c => { c.surveys.unshift(newSurvey()); return c; })}>＋ アンケートを作る</button>
       </div>
+
+      <div className="ad-card">
+        <div className="ad-card-head">
+          <span className="ad-type">🏢 クライアント（アンケートの依頼主）とレポート</span>
+          <button onClick={() => update(c => { c.clients = [{ id: rid(), name: '' }, ...(c.clients || [])]; return c; })}>＋ クライアントを追加</button>
+        </div>
+        <p className="ad-small">
+          クライアントを登録して、下の各アンケートの「クライアント」で割り当てると、そのクライアント専用のレポートURLができます。
+          URLを知っている人だけが、ログインなしで集計（回答数・日別・回答場所別・設問ごとの結果・CSV）を見られます。印刷するとPDFで保存できます。
+        </p>
+        {clients.length === 0 && <p className="ad-empty">まだクライアントがありません</p>}
+        {clients.map((c, i) => {
+          const count = cfg.surveys.filter(x => x.client === c.id).length;
+          const url = reportUrl(c);
+          return (
+            <div key={c.id} className="ad-client">
+              <div className="ad-row">
+                <Field label="クライアント名"><input value={c.name} onChange={e => setClient(i, { name: e.target.value })} placeholder="例：立川駅前商店会" /></Field>
+                <Field label="担当者・連絡先（任意）"><input value={c.contact || ''} onChange={e => setClient(i, { contact: e.target.value })} placeholder="山田様 yamada@example.com" /></Field>
+                <Field label="メモ（任意）"><input value={c.note || ''} onChange={e => setClient(i, { note: e.target.value })} /></Field>
+              </div>
+              <div className="ad-row ad-survey-tools">
+                <span className="ad-small">割り当て：{count}件</span>
+                {url ? (
+                  <>
+                    <input readOnly value={url} onFocus={e => e.target.select()} title="クライアントに送るレポートURL" />
+                    <button className="ad-sub" onClick={() => { navigator.clipboard?.writeText(url); }}>コピー</button>
+                    <a className="ad-sub ad-linkbtn" href={url} target="_blank" rel="noreferrer">開く</a>
+                    <button className="ad-sub" onClick={() => { if (confirm('レポートURLを作り直します。今のURLは見られなくなります（保存後に反映）')) setClient(i, { reportKey: '' }); }}>URLを再発行</button>
+                  </>
+                ) : <span className="ad-small">保存するとレポートURLが発行されます</span>}
+                <button className="ad-del" onClick={() => { if (confirm(`「${c.name || '無題'}」を削除しますか？（アンケートの割り当ても外れます）`)) update(x => { x.clients!.splice(i, 1); x.surveys.forEach(sv => { if (sv.client === c.id) sv.client = undefined; }); return x; }); }}>削除</button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
       {cfg.surveys.length === 0 && <p className="ad-empty">まだアンケートがありません</p>}
       {cfg.surveys.map((s, i) => (
         <div key={s.id}>
@@ -579,10 +622,23 @@ function Surveys({ cfg, update, api, origin }: Sub & { api: any; origin: string 
             onChange={v => update(c => { c.surveys[i] = v; return c; })}
             onDelete={() => update(c => { c.surveys.splice(i, 1); return c; })} />
           <div className="ad-row ad-survey-tools">
+            <label className="ad-client-pick">クライアント
+              <select value={s.client || ''} onChange={e => update(c => { c.surveys[i] = { ...c.surveys[i], client: e.target.value || undefined }; return c; })}>
+                <option value="">（なし）</option>
+                {clients.filter(c => c.name).map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </select>
+            </label>
             <button className="ad-sub" onClick={() => showResults(s.id)}>{open === s.id ? '集計を閉じる' : '📊 集計を見る'}</button>
             <input readOnly value={`${origin}/q?s=${s.id}`} onFocus={e => e.target.select()} title="スマホ回答用URL（Web・チラシのQRなど）" />
           </div>
-          {open === s.id && <div className="ad-card"><SurveyResults survey={s} agg={aggs[s.id] || null} onExport={async () => (await api(`/api/admin/survey/export?id=${s.id}`)).rows} /></div>}
+          {open === s.id && (
+            <div className="ad-card">
+              <SurveyResults survey={s} agg={aggs[s.id] || null} deviceNames={{ qr: 'QRコード（スマホ）', web: 'Web', ...Object.fromEntries(cfg.devices.map(d => [d.id, d.name])) }} onExport={async () => (await api(`/api/admin/survey/export?id=${s.id}`)).rows} />
+              {!!aggs[s.id]?.total && !aggs[s.id]?.days && (
+                <p className="ad-small">日別・回答場所別の内訳がまだありません（以前の回答）。<button className="ad-sub" onClick={() => reagg(s.id)}>保存済みの回答から内訳を作る</button></p>
+              )}
+            </div>
+          )}
         </div>
       ))}
       <div className="ad-card">
@@ -658,7 +714,7 @@ function VoiceCard({ cfg, update, api, token }: Sub & { api: any; token: string 
         <>
           <label className="ad-toggle"><input type="checkbox" checked={s.ttsEnabled !== false} onChange={e => update(c => { c.settings.ttsEnabled = e.target.checked; return c; })} /> ElevenLabs の声で読み上げる（オフにするとブラウザの音声）</label>
           <div className="ad-row">
-            <Field label="声" hint={info.voicesError ? `声の一覧を取得できませんでした（${info.voicesError}）。API キーに「Voices：読み取り」の権限があるか確認してください` : '未選択のときはアカウントの最初の声を使います。声は ElevenLabs の Voice Library でマイボイスに追加すると一覧に出ます'}>
+            <Field label="声" hint={info.voicesError ? `声の一覧を取得できませんでした：${info.voicesError}（このままでも標準の声で読み上げます。声を指定したいときは Voice ID を下に入力）` : '未選択のときはアカウントの最初の声を使います。声は ElevenLabs の Voice Library でマイボイスに追加すると一覧に出ます'}>
               <select value={s.ttsVoiceId || ''} onChange={e => update(c => { c.settings.ttsVoiceId = e.target.value; return c; })}>
                 <option value="">（自動）</option>
                 {(info.voices || []).map(v => (
@@ -666,6 +722,10 @@ function VoiceCard({ cfg, update, api, token }: Sub & { api: any; token: string 
                 ))}
                 {s.ttsVoiceId && !(info.voices || []).some(v => v.id === s.ttsVoiceId) && <option value={s.ttsVoiceId}>{s.ttsVoiceId}</option>}
               </select>
+              {info.voicesError && (
+                <input value={s.ttsVoiceId || ''} onChange={e => update(c => { c.settings.ttsVoiceId = e.target.value.trim(); return c; })}
+                  placeholder="Voice ID を直接入力（ElevenLabs の声の画面でコピー）" style={{ marginTop: 6 }} />
+              )}
             </Field>
             <Field label="モデル">
               <select value={s.ttsModel || 'eleven_flash_v2_5'} onChange={e => update(c => { c.settings.ttsModel = e.target.value; return c; })}>

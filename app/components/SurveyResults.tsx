@@ -5,20 +5,20 @@
 import React from 'react';
 import { Agg, Survey } from '../lib/survey';
 
-type Props = { survey: Survey; agg: Agg | null; onExport?: () => Promise<{ device?: string; created: string; answers: Record<string, any> }[]> };
+type Props = { survey: Survey; agg: Agg | null; onExport?: () => Promise<{ device?: string; created: string; answers: Record<string, any> }[]>; deviceNames?: Record<string, string>; hideHead?: boolean };
 
-export default function SurveyResults({ survey, agg, onExport }: Props) {
+export default function SurveyResults({ survey, agg, onExport, deviceNames, hideHead }: Props) {
   const total = agg?.total || 0;
 
   const csv = async () => {
     if (!onExport) return;
     const rows = await onExport();
-    const head = ['回答日時', '端末', ...survey.questions.flatMap(q =>
+    const head = ['回答日時', '回答場所', ...survey.questions.flatMap(q =>
       q.type === 'matrix' ? (q.rows || []).map(r => `${q.text}：${r.label}`) : [q.text])];
     const label = (list: { id: string; label: string }[] | undefined, id: string) => list?.find(o => o.id === id)?.label || id;
     const lines = rows.map(r => [
       new Date(r.created).toLocaleString('ja-JP'),
-      r.device || '',
+      (r.device && deviceNames?.[r.device]) || r.device || '',
       ...survey.questions.flatMap(q => {
         const v = r.answers[q.id];
         if (q.type === 'matrix') return (q.rows || []).map(row => (v?.[row.id] ? label(q.cols, v[row.id]) : ''));
@@ -38,10 +38,10 @@ export default function SurveyResults({ survey, agg, onExport }: Props) {
 
   return (
     <div className="sr">
-      <div className="sr-head">
+      {!hideHead && <div className="sr-head">
         <b>📊 {survey.title || '無題'}：回答 {total.toLocaleString()} 件</b>
         {onExport && <button onClick={csv} disabled={!total}>CSVで保存</button>}
-      </div>
+      </div>}
       {survey.questions.map((q, i) => {
         const a = agg?.q?.[q.id] || {};
         return (

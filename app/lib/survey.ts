@@ -36,6 +36,7 @@ export type Survey = {
   questions: Question[];
   incentive: Incentive;
   owner?: string;
+  client?: string; // 依頼主（クライアント）ID
   startAt?: string;
   endAt?: string;
 };
@@ -45,7 +46,9 @@ export type SubmitResult = {
   thanks?: string;
   incentive?: { type: 'none' | 'coupon' | 'lottery'; won?: boolean; text?: string; code?: string; url?: string; claim?: string };
 };
-export type Agg = { total: number; q: Record<string, Record<string, any>> };
+// days：日別の回答数、dev：設置場所（端末ID・qr・web）別の回答数
+export type Agg = { total: number; q: Record<string, Record<string, any>>; days?: Record<string, number>; dev?: Record<string, number>; first?: string; updated?: string };
+export type Client = { id: string; name: string; contact?: string; note?: string; reportKey?: string };
 
 export const QTYPE_LABEL: Record<QType, string> = {
   single: '1つ選ぶ',
